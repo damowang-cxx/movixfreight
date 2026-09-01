@@ -1,0 +1,162 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e35]:
+      - generic [ref=e36]:
+        - generic [ref=e37]: M
+        - generic [ref=e38]: MOVIX FREIGHT
+      - generic [ref=e39]: OPERATIONS WORKSPACE
+      - menu [ref=e40]:
+        - menuitem "file-text 订单管理" [ref=e41] [cursor=pointer]:
+          - img "file-text" [ref=e42]
+          - generic [ref=e45]: 订单管理
+        - menuitem "team 客户管理" [ref=e46] [cursor=pointer]:
+          - img "team" [ref=e47]
+          - generic [ref=e50]: 客户管理
+        - menuitem "truck 产品与渠道" [expanded] [ref=e51] [cursor=pointer]:
+          - img "truck" [ref=e52]
+          - generic [ref=e55]: 产品与渠道
+        - menu [ref=e115]:
+          - menuitem "供应商与渠道" [ref=e116] [cursor=pointer]
+          - menuitem "服务管理" [ref=e118] [cursor=pointer]
+        - menuitem "wallet 报价管理" [ref=e56] [cursor=pointer]:
+          - img "wallet" [ref=e57]
+          - generic [ref=e60]: 报价管理
+        - menuitem "appstore 账单管理" [ref=e61] [cursor=pointer]:
+          - img "appstore" [ref=e62]
+          - generic [ref=e65]: 账单管理
+        - menuitem "bar-chart 数据统计" [ref=e66] [cursor=pointer]:
+          - img "bar-chart" [ref=e67]
+          - generic [ref=e70]: 数据统计
+  - generic [ref=e71]:
+    - banner [ref=e72]:
+      - generic [ref=e73]:
+        - generic [ref=e74]: FedEx 连接：SANDBOX
+        - generic [ref=e76]: 渠道区分承运商，供应商连接区分账号与环境
+      - generic [ref=e77]:
+        - button "logout 退出" [ref=e79] [cursor=pointer]:
+          - img "logout" [ref=e81]
+          - generic [ref=e84]: 退出
+        - generic [ref=e85]: M
+    - generic [ref=e88]:
+      - button [ref=e89] [cursor=pointer]:
+        - img "home" [ref=e91]
+      - button "首页" [ref=e94] [cursor=pointer]
+      - button "供应商与渠道×" [ref=e120] [cursor=pointer]
+    - main [ref=e95]:
+      - generic [ref=e121]:
+        - heading "供应商与渠道" [level=2] [ref=e122]
+        - generic [ref=e123]: 关系：尾程渠道（FedEx / UPS / DPD）→ 供应商连接（账号、环境、接口）→ 服务。密钥、账号和 URL 只由本地连接配置文件保存，页面不会显示其原文。
+        - alert [ref=e124]:
+          - img "check-circle" [ref=e125]
+          - generic [ref=e128]:
+            - generic [ref=e129]: FedEx 本地连接已就绪，当前环境：SANDBOX
+            - generic [ref=e130]: 凭据状态只表示本地配置是否完整；具体服务仍须绑定已启用的供应商连接。
+        - generic [ref=e131]:
+          - generic [ref=e132]: 接口列表
+          - table [ref=e142]:
+            - rowgroup [ref=e143]:
+              - row [ref=e144]:
+                - columnheader "接口驱动" [ref=e145]
+                - columnheader "兼容尾程渠道" [ref=e146]
+                - columnheader "支持能力" [ref=e147]
+                - columnheader "凭据状态" [ref=e148]
+            - rowgroup [ref=e149]:
+              - row [ref=e150]:
+                - cell "FEDEX_RELAY FedEx Ship-API Direct 中转接口" [ref=e151]: FEDEX_RELAYFedEx Ship-API Direct 中转接口
+                - cell "FEDEX" [ref=e152]
+                - cell "支持 OAuth、Validate、Create 和 4×6 PDF 面单。连接凭据由本地配置文件维护。" [ref=e154]
+                - cell "本地已配置" [ref=e155]
+        - generic [ref=e157]:
+          - generic [ref=e159]:
+            - generic [ref=e160]: 新增尾程渠道
+            - generic [ref=e163]:
+              - generic [ref=e164]: 仅填写名称，系统自动生成不可变内部编号。
+              - generic [ref=e165]:
+                - generic [ref=e167]:
+                  - generic "渠道名称" [ref=e169]: "* 渠道名称"
+                  - textbox "* 渠道名称 * 供应商连接名称" [ref=e173]:
+                    - /placeholder: FedEx
+                - button "新增渠道" [ref=e174] [cursor=pointer]
+              - separator [ref=e176]:
+                - generic [ref=e177]: 已建渠道
+              - generic [ref=e178]:
+                - generic [ref=e179]: 启用
+                - text: Fedex
+                - generic [ref=e180]: · FEDEX_2 · 0 个连接
+                - button "删除" [active] [ref=e181] [cursor=pointer]
+              - generic [ref=e183]:
+                - generic [ref=e184]: 启用
+                - text: FedEx
+                - generic [ref=e185]: · FEDEX · 1 个连接
+                - button "删除" [disabled] [ref=e186]
+          - generic [ref=e188]:
+            - generic [ref=e189]: 新增供应商连接
+            - generic [ref=e193]:
+              - generic [ref=e194]:
+                - generic [ref=e197]:
+                  - generic "所属尾程渠道" [ref=e199]: "* 所属尾程渠道"
+                  - combobox "* 所属尾程渠道" [ref=e207]
+                - generic [ref=e210]:
+                  - generic "后端接口驱动" [ref=e212]: "* 后端接口驱动"
+                  - generic [ref=e218] [cursor=pointer]:
+                    - combobox "* 后端接口驱动" [ref=e220]
+                    - generic "FEDEX_RELAY · FedEx Ship-API Direct 中转接口" [ref=e221]
+              - generic [ref=e222]:
+                - generic [ref=e225]:
+                  - generic "供应商连接编号" [ref=e227]: "* 供应商连接编号"
+                  - textbox "* 供应商连接编号" [ref=e231]:
+                    - /placeholder: FEDEX_RELAY_SANDBOX_01
+                - generic [ref=e234]:
+                  - generic "供应商连接名称" [ref=e236]: "* 供应商连接名称"
+                  - textbox "FedEx Relay Sandbox" [ref=e240]
+              - generic [ref=e242]:
+                - generic "环境" [ref=e244]: "* 环境"
+                - generic [ref=e250] [cursor=pointer]:
+                  - combobox "* 环境" [ref=e252]
+                  - generic "Sandbox" [ref=e253]
+              - generic [ref=e255]:
+                - generic "件数模式" [ref=e257]
+                - generic [ref=e263] [cursor=pointer]:
+                  - combobox "件数模式" [ref=e265]
+                  - generic "由服务选择" [ref=e266]
+              - generic [ref=e268]:
+                - generic "服务可选件数模式" [ref=e270]
+                - generic [ref=e277]:
+                  - generic "仅一件" [ref=e279]
+                  - generic "支持多件" [ref=e286]
+                  - combobox "服务可选件数模式" [ref=e294]
+              - generic [ref=e296]:
+                - generic "实际数据来源" [ref=e298]
+                - generic [ref=e304] [cursor=pointer]:
+                  - combobox "实际数据来源" [ref=e306]
+                  - generic "供应商账单导入" [ref=e307]
+              - button "保存供应商连接" [ref=e308] [cursor=pointer]
+        - separator [ref=e310]:
+          - generic [ref=e311]: 供应商连接
+        - generic [ref=e314]:
+          - table [ref=e318]:
+            - rowgroup [ref=e319]:
+              - row [ref=e320]:
+                - columnheader "尾程渠道" [ref=e321]
+                - columnheader "供应商连接" [ref=e322]
+                - columnheader "接口 / 环境" [ref=e323]
+                - columnheader "状态" [ref=e324]
+                - columnheader "引用" [ref=e325]
+            - rowgroup [ref=e326]:
+              - row [ref=e327] [cursor=pointer]:
+                - cell "FedEx FEDEX" [ref=e328]: FedExFEDEX
+                - cell "FEDEX_RELAY_SANDBOX FedEx Relay Sandbox" [ref=e329]: FEDEX_RELAY_SANDBOXFedEx Relay Sandbox
+                - cell "FEDEX_RELAY SANDBOX" [ref=e330]:
+                  - generic [ref=e331]:
+                    - generic [ref=e332]: FEDEX_RELAY
+                    - generic [ref=e334]: SANDBOX
+                - cell "启用" [ref=e336]
+                - cell "服务 1 · 成本 1 · 账单 0" [ref=e338]
+          - list [ref=e339]:
+            - listitem "Previous Page" [ref=e340]:
+              - button [disabled] [ref=e341]:
+                - img "left" [ref=e342]
+            - listitem "1" [ref=e345] [cursor=pointer]
+            - listitem "Next Page" [ref=e347]:
+              - button [disabled] [ref=e348]:
+                - img "right" [ref=e349]

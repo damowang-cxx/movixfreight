@@ -1,0 +1,67 @@
+{
+  "fedexRelay": {
+    "profiles": {
+      "FEDEX_RELAY_SANDBOX_01": {
+        "enabled": true,
+        "environment": "sandbox",
+        "baseUrl": "https://direct.ship-api.com/fedex",
+        "shipApiKey": "填写供应商提供的 SHIP_API_KEY",
+        "fedexAccountNumber": "填写 FedEx 账号",
+        "authHeaderName": "ship-api-authorization",
+        "shipper": {
+          "name": "填写寄件人名称",
+          "company": "填写寄件公司",
+          "phone": "填写电话",
+          "streetLines": ["填写地址第一行"],
+          "city": "填写城市",
+          "postalCode": "填写邮编",
+          "countryCode": "NL"
+        }
+      },
+      "FEDEX_RELAY_PRODUCTION_01": {
+        "enabled": false,
+        "environment": "production",
+        "baseUrl": "由 Ship-API Direct 提供的生产地址",
+        "shipApiKey": "填写生产 SHIP_API_KEY",
+        "fedexAccountNumber": "填写已获生产授权的 FedEx 账号",
+        "authHeaderName": "ship-api-authorization",
+        "shipper": {
+          "name": "填写生产寄件人名称",
+          "company": "填写生产寄件公司",
+          "phone": "填写生产电话",
+          "streetLines": ["填写生产地址第一行"],
+          "city": "填写生产城市",
+          "postalCode": "填写生产邮编",
+          "countryCode": "NL"
+        }
+      }
+    },
+    "enabled": true,
+    "environment": "sandbox",
+    "baseUrl": "https://direct.ship-api.com/fedex",
+    "shipApiKey": "填写供应商提供的 SHIP_API_KEY",
+    "fedexAccountNumber": "填写 FedEx 账号",
+    "authHeaderName": "ship-api-authorization",
+    "shipper": {
+      "name": "填写寄件人名称",
+      "company": "填写寄件公司",
+      "phone": "填写电话",
+      "streetLines": ["填写地址第一行"],
+      "city": "填写城市",
+      "postalCode": "填写邮编",
+      "countryCode": "NL"
+    }
+  },
+  "ups": {
+    "enabled": false,
+    "environment": "sandbox",
+    "baseUrl": "",
+    "apiKey": ""
+  },
+  "dhl": {
+    "enabled": false,
+    "environment": "sandbox",
+    "baseUrl": "",
+    "apiKey": ""
+  }
+}

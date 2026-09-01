@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file: .env.production
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes: [postgres_production:/var/lib/postgresql/data]
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes: [redis_production:/data]
+    restart: unless-stopped
+  api:
+    build: { context: ., dockerfile: infra/docker/Dockerfile.api }
+    env_file: .env.production
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DISPATCH_WORKER_ENABLED: "false"
+    volumes: [./config/connectors.production.json:/run/secrets/connectors.json:ro]
+    restart: unless-stopped
+    depends_on: [postgres, redis]
+  worker:
+    build: { context: ., dockerfile: infra/docker/Dockerfile.api }
+    command: node apps/api/dist/main.js
+    env_file: .env.production
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DISPATCH_WORKER_ENABLED: "true"
+    volumes: [./config/connectors.production.json:/run/secrets/connectors.json:ro]
+    restart: unless-stopped
+    depends_on: [postgres, redis]
+  admin-web:
+    build: { context: ., dockerfile: infra/docker/Dockerfile.web, args: { APP: admin-web, VITE_BASE: /admin/ } }
+    restart: unless-stopped
+  customer-web:
+    build: { context: ., dockerfile: infra/docker/Dockerfile.web, args: { APP: customer-web, VITE_BASE: / } }
+    restart: unless-stopped
+  gateway:
+    image: nginx:1.27-alpine
+    env_file: .env.production
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infra/nginx/gateway.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+    restart: unless-stopped
+    depends_on: [api, admin-web, customer-web]
+volumes:
+  postgres_production:
+  redis_production:

@@ -1,0 +1,20 @@
+{
+  "name": "movix-freight",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @movix/admin-web --filter @movix/customer-web --filter @movix/api dev",
+    "dev:api": "pnpm --filter @movix/api dev",
+    "dev:admin": "pnpm --filter @movix/admin-web dev",
+    "dev:customer": "pnpm --filter @movix/customer-web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "pnpm --filter @movix/api prisma:generate",
+    "db:migrate": "pnpm --filter @movix/api prisma:migrate"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.6"
+  }
+}
+

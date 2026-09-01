@@ -1,0 +1,15 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]: M
+    - heading "FedEx Sandbox 控制台" [level=1] [ref=e6]
+    - generic [ref=e7]: 使用管理员账号进入测试打单工作区。
+    - generic [ref=e8]:
+      - generic [ref=e10]:
+        - generic "管理员用户名" [ref=e12]: "* 管理员用户名"
+        - textbox "* 管理员用户名" [active] [ref=e16]
+      - generic [ref=e18]:
+        - generic "密码" [ref=e20]: "* 密码"
+        - generic [ref=e24]:
+          - textbox "* 密码" [ref=e25]
+          - img "eye-invisible" [ref=e27] [cursor=pointer]
+      - button "进入工作区" [ref=e31] [cursor=pointer]

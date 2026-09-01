@@ -1,0 +1,845 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Currency {
+  EUR
+  GBP
+}
+
+enum CustomerStatus {
+  PENDING_REVIEW
+  PENDING_RECHARGE_VERIFICATION
+  NORMAL
+  FROZEN
+  ARREARS
+  REJECTED
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  OPERATIONS
+  FINANCE
+  PRICING
+  CUSTOMER_SERVICE
+}
+
+enum WalletLedgerType {
+  OPENING_BALANCE
+  ADMIN_CREDIT
+  ADMIN_DEBIT
+  SHIPPING_PRECHARGE
+  CANCELLATION_REFUND
+  RECONCILIATION_DEBIT
+  RECONCILIATION_REFUND
+  REVERSAL
+}
+
+enum ChannelEnvironment {
+  SANDBOX
+  PRODUCTION
+}
+
+enum BillingMethod {
+  WEIGHT
+  VOLUME
+  MAX_ACTUAL_OR_VOLUMETRIC
+}
+
+enum MeasurementMethod {
+  PER_SHIPMENT
+  PER_BOX
+}
+
+enum ShipmentStatus {
+  SUBMITTED
+  GENERATING
+  GENERATED
+  RECEIVED
+  RETURNED
+  CANCELLED
+  FAILED
+  UNKNOWN
+}
+
+enum FeeStatus {
+  PRECHARGED
+  FINAL_WEIGHT_PENDING
+  RECONCILIATION_PENDING
+  RECONCILED
+  REFUNDED
+  ADJUSTED
+}
+
+enum ActualDataSource {
+  API_CALLBACK
+  QUERY_API
+  BILL_EXCEL_IMPORT
+}
+
+enum SupplierBillImportStatus {
+  MATCHED
+  PARTIALLY_MATCHED
+  APPLIED
+  FAILED
+}
+
+enum SupplierBillMatchStatus {
+  MATCHED
+  UNMATCHED
+  CHANNEL_MISMATCH
+  ALREADY_RECONCILING
+  APPLIED
+}
+
+enum ReconciliationStatus {
+  PENDING_FINANCE_CONFIRMATION
+  CONFIRMED
+  REJECTED
+}
+
+enum CancellationRefundStatus {
+  PENDING_FINANCE_CONFIRMATION
+  CONFIRMED
+  REJECTED
+}
+
+enum ConnectorOperation {
+  VALIDATE_SHIPMENT
+  CREATE_SHIPMENT
+  CANCEL_SHIPMENT
+  QUERY_SHIPMENT
+  TRACK_SHIPMENT
+}
+
+enum ConnectorCallStatus {
+  SUCCESS
+  FAILED
+}
+
+enum ShipmentDispatchJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  UNKNOWN
+}
+
+enum PriceVersionStatus {
+  DRAFT
+  SCHEDULED
+  ACTIVE
+  DISABLED
+  EXPIRED
+}
+
+enum CostBillingUnit {
+  PER_SHIPMENT
+  PER_BOX
+  PER_KG
+}
+
+enum CostPostcodeRuleType {
+  DEFAULT
+  EXACT
+  NUMERIC_RANGE
+}
+
+enum ProfitScope {
+  DEFAULT
+  CUSTOMER_LEVEL
+  CUSTOMER_GROUP
+  SPECIFIC_CUSTOMER
+}
+
+enum ProfitMode {
+  PERCENT_OF_COST
+  FIXED_AMOUNT
+}
+
+enum BalanceAlertAudience {
+  ADMIN
+  CUSTOMER
+}
+
+model Customer {
+  id          String         @id @default(cuid())
+  customerNo  String         @unique
+  username    String         @unique
+  passwordHash String
+  status      CustomerStatus @default(PENDING_REVIEW)
+  isTest      Boolean        @default(false)
+  contactName String?
+  companyName String?
+  email       String?
+  phone       String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  wallets     CustomerWallet[]
+  orders      Order[]
+  apiKey      CustomerApiKey?
+  openApiIdempotencyRecords OpenApiIdempotencyRecord[]
+  balanceAlertNotifications BalanceAlertNotification[]
+  levelAssignments CustomerLevelAssignment[]
+  groupAssignments CustomerGroupAssignment[]
+}
+
+model AdminUser {
+  id           String          @id @default(cuid())
+  username     String          @unique
+  passwordHash String
+  displayName  String
+  avatarContent Bytes?
+  avatarMimeType String?
+  enabled      Boolean         @default(true)
+  roles        AdminUserRole[]
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+model CustomerLevel {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String   @unique
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  assignments CustomerLevelAssignment[]
+}
+
+model CustomerGroup {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String   @unique
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  assignments CustomerGroupAssignment[]
+}
+
+model CustomerLevelAssignment {
+  id            String        @id @default(cuid())
+  customerId    String
+  customerLevelId String
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  createdAt     DateTime      @default(now())
+  customer      Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customerLevel CustomerLevel @relation(fields: [customerLevelId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, effectiveFrom, effectiveTo])
+  @@index([customerLevelId])
+}
+
+model CustomerGroupAssignment {
+  id            String        @id @default(cuid())
+  customerId    String
+  customerGroupId String
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  createdAt     DateTime      @default(now())
+  customer      Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customerGroup CustomerGroup @relation(fields: [customerGroupId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, effectiveFrom, effectiveTo])
+  @@index([customerGroupId])
+}
+
+model DeclarationFieldSetting {
+  fieldCode        String   @id
+  required         Boolean  @default(false)
+  updatedByAdminId String?
+  updatedAt        DateTime @updatedAt
+}
+
+model AdminUserRole {
+  adminUserId String
+  role        AdminRole
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@id([adminUserId, role])
+}
+
+model CustomerWallet {
+  id         String   @id @default(cuid())
+  customerId String
+  currency   Currency
+  balance    Decimal  @db.Decimal(18, 2) @default(0)
+  version    Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  ledgers    WalletLedger[]
+
+  @@unique([customerId, currency])
+}
+
+model WalletLedger {
+  id               String           @id @default(cuid())
+  ledgerNo         String           @unique
+  walletId         String
+  type             WalletLedgerType
+  amount           Decimal          @db.Decimal(18, 2)
+  balanceBefore    Decimal          @db.Decimal(18, 2)
+  balanceAfter     Decimal          @db.Decimal(18, 2)
+  relatedOrderId   String?
+  reversalOfId     String?          @unique
+  reason           String
+  operatorId       String?
+  createdAt        DateTime         @default(now())
+  wallet           CustomerWallet   @relation(fields: [walletId], references: [id], onDelete: Restrict)
+}
+
+model BalanceAlertSetting {
+  id          String   @id @default(cuid())
+  currency    Currency @unique
+  threshold   Decimal  @db.Decimal(18, 2)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+model BalanceAlertState {
+  walletId   String   @id
+  customerId String
+  currency   Currency
+  threshold  Decimal  @db.Decimal(18, 2)
+  balance    Decimal  @db.Decimal(18, 2)
+  active     Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+
+  @@index([customerId, currency, active])
+}
+
+model BalanceAlertNotification {
+  id         String               @id @default(cuid())
+  audience   BalanceAlertAudience
+  customerId String?
+  walletId   String
+  currency   Currency
+  title      String
+  content    String
+  readAt     DateTime?
+  createdAt  DateTime             @default(now())
+  customer   Customer?            @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([audience, readAt, createdAt])
+  @@index([customerId, createdAt])
+}
+
+model CustomerApiKey {
+  id          String   @id @default(cuid())
+  customerId  String   @unique
+  keyPrefix   String
+  secretHash  String
+  createdById String?
+  createdAt   DateTime @default(now())
+  rotatedAt   DateTime?
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+}
+
+model OpenApiIdempotencyRecord {
+  id                  String   @id @default(cuid())
+  customerId          String
+  idempotencyKeyHash  String
+  requestHash         String
+  orderId             String   @unique
+  createdAt           DateTime @default(now())
+  customer            Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  order               Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, idempotencyKeyHash])
+}
+
+model CarrierChannel {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  suppliers   Supplier[]
+  fuelSurcharges CarrierFuelSurcharge[]
+  costVersions SupplierCostVersion[]
+  billImportBatches SupplierBillImportBatch[]
+
+  @@map("Supplier")
+}
+
+model CarrierFuelSurcharge {
+  id            String         @id @default(cuid())
+  carrierId     String
+  percent       Decimal        @db.Decimal(8, 4)
+  effectiveFrom DateTime
+  effectiveTo   DateTime
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  carrier       CarrierChannel @relation(fields: [carrierId], references: [id], onDelete: Cascade)
+
+  @@index([carrierId, effectiveFrom, effectiveTo])
+}
+
+model Supplier {
+  id                String             @id @default(cuid())
+  carrierId         String             @map("supplierId")
+  code              String             @unique
+  name              String
+  driverCode        String
+  environment       ChannelEnvironment
+  encryptedConfig   Json
+  businessConfig    Json               @default("{}")
+  actualDataSource  ActualDataSource   @default(BILL_EXCEL_IMPORT)
+  enabled           Boolean            @default(true)
+  carrier           CarrierChannel     @relation(fields: [carrierId], references: [id], onDelete: Restrict)
+  services          Service[]
+  costVersions      SupplierCostVersion[]
+  billImportBatches SupplierBillImportBatch[]
+  labelTemplates    CarrierLabelTemplate[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@map("SupplierChannel")
+}
+
+model CarrierLabelTemplate {
+  id                   String   @id @default(cuid())
+  supplierId           String
+  name                 String
+  outputFormat         String   @default("PDF")
+  labelStockType       String   @default("PAPER_4X6")
+  thermalDpi           Int?
+  customElements       Json     @default("[]")
+  enabled              Boolean  @default(true)
+  applyToCarrier       Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  supplier             Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  @@index([supplierId, enabled, applyToCarrier])
+}
+
+model Service {
+  id                      String            @id @default(cuid())
+  code                    String            @unique
+  name                    String
+  carrierServiceType      String?
+  supplierId              String            @map("channelId")
+  currency                Currency
+  billingMethod           BillingMethod
+  measurementMethod       MeasurementMethod
+  volumetricDivisor       Decimal?          @db.Decimal(12, 2)
+  allowsMultiPiece        Boolean           @default(false)
+  minPieces               Int               @default(1)
+  maxActualWeightKg       Decimal?          @db.Decimal(12, 3)
+  chargeableWeightScale   Int               @default(3)
+  enabled                 Boolean           @default(true)
+  remoteFeeEnabled        Boolean           @default(false)
+  remoteFeeAmount         Decimal?          @db.Decimal(18, 2)
+  remoteAreaTemplateId    String?
+  fuelEnabled             Boolean           @default(false)
+  fuelPercent             Decimal?          @db.Decimal(8, 4)
+  overweightEnabled       Boolean           @default(false)
+  overweightRule          Json?
+  supplier                Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  remoteAreaTemplate      RemoteAreaTemplate? @relation(fields: [remoteAreaTemplateId], references: [id], onDelete: Restrict)
+  orders                  Order[]
+  profitVersions          ServiceProfitVersion[]
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+}
+
+model SupplierCostVersion {
+  id            String             @id @default(cuid())
+  carrierId     String             @map("supplierId")
+  supplierConnectionId String?
+  versionNo     String
+  currency      Currency
+  status        PriceVersionStatus @default(DRAFT)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  minWeightKg   Decimal            @default(0) @db.Decimal(12, 3)
+  maxWeightKg   Decimal?           @db.Decimal(12, 3)
+  minBoxes      Int                @default(1)
+  maxBoxes      Int?
+  carrier       CarrierChannel     @relation(fields: [carrierId], references: [id], onDelete: Restrict)
+  supplier      Supplier?          @relation(fields: [supplierConnectionId], references: [id], onDelete: Restrict)
+  countries     SupplierCostTableCountry[]
+  rows          SupplierCostRate[]
+  profitSourceVersions ServiceProfitVersion[] @relation("ProfitSourceCostVersion")
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([carrierId, versionNo])
+  @@index([supplierConnectionId])
+}
+
+model SupplierCostRate {
+  id                String              @id @default(cuid())
+  versionId         String
+  countryCode       String
+  postcodeRuleType  CostPostcodeRuleType @default(DEFAULT)
+  postcodeRuleStart String              @default("")
+  postcodeRuleEnd   String?
+  minimumPerShipment Decimal            @default(0) @db.Decimal(18, 2)
+  minimumPerBox     Decimal             @default(0) @db.Decimal(18, 2)
+  registrationFee   Decimal             @default(0) @db.Decimal(18, 2)
+  operationFeePerKg Decimal             @default(0) @db.Decimal(18, 4)
+  perKgAboveKg      Decimal?            @db.Decimal(12, 3)
+  perKgRate         Decimal?            @db.Decimal(18, 4)
+  perCubicMeterRate Decimal?            @db.Decimal(18, 2)
+  version           SupplierCostVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  tiers             SupplierCostWeightTier[]
+
+  @@unique([versionId, countryCode, postcodeRuleType, postcodeRuleStart])
+  @@index([versionId, countryCode])
+}
+
+model SupplierCostWeightTier {
+  id          String           @id @default(cuid())
+  costRateId  String
+  minKg       Decimal          @db.Decimal(12, 3)
+  maxKg       Decimal          @db.Decimal(12, 3)
+  fixedAmount Decimal          @db.Decimal(18, 2)
+  billingUnit CostBillingUnit  @default(PER_SHIPMENT)
+  costRate    SupplierCostRate @relation(fields: [costRateId], references: [id], onDelete: Cascade)
+
+  @@unique([costRateId, minKg, maxKg])
+}
+
+model Country {
+  code        String                     @id @db.Char(2)
+  chineseName String                     @unique
+  enabled     Boolean                    @default(true)
+  costTables  SupplierCostTableCountry[]
+  createdAt   DateTime                   @default(now())
+  updatedAt   DateTime                   @updatedAt
+}
+
+model SupplierCostTableCountry {
+  versionId   String
+  countryCode String                     @db.Char(2)
+  version     SupplierCostVersion        @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  country     Country                    @relation(fields: [countryCode], references: [code], onDelete: Restrict)
+
+  @@id([versionId, countryCode])
+  @@index([countryCode])
+}
+
+model ServiceProfitVersion {
+  id            String             @id @default(cuid())
+  serviceId     String
+  versionNo     String
+  scope         ProfitScope
+  scopeTargetId String?
+  sourceCostVersionId String?
+  defaultMode   ProfitMode         @default(FIXED_AMOUNT)
+  defaultValue  Decimal            @default(0) @db.Decimal(18, 4)
+  currency      Currency
+  status        PriceVersionStatus @default(DRAFT)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  service       Service            @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  sourceCostVersion SupplierCostVersion? @relation("ProfitSourceCostVersion", fields: [sourceCostVersionId], references: [id], onDelete: SetNull)
+  rows          ServiceProfitRate[]
+  changeLogs    ProfitVersionChangeLog[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([serviceId, versionNo])
+  @@index([sourceCostVersionId])
+}
+
+model ProfitVersionChangeLog {
+  id            String               @id @default(cuid())
+  versionId     String
+  changedById   String?
+  beforeSnapshot Json
+  afterSnapshot  Json
+  createdAt     DateTime             @default(now())
+  version       ServiceProfitVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+
+  @@index([versionId, createdAt])
+}
+
+model ServiceProfitRate {
+  id              String               @id @default(cuid())
+  versionId       String
+  countryCode     String
+  mode            ProfitMode
+  value           Decimal              @db.Decimal(18, 4)
+  version         ServiceProfitVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@unique([versionId, countryCode])
+}
+
+model RemoteAreaTemplate {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  name        String
+  description String?
+  enabled     Boolean   @default(true)
+  rules       RemotePostcodeRule[]
+  services    Service[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model RemotePostcodeRule {
+  id          String             @id @default(cuid())
+  templateId  String
+  countryCode String
+  ruleType    String
+  ruleValue   String
+  template    RemoteAreaTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, countryCode])
+}
+
+model Order {
+  id                      String         @id @default(cuid())
+  orderNo                 String         @unique
+  idempotencyKey          String         @unique
+  customerId              String
+  serviceId               String
+  isTest                  Boolean        @default(false)
+  carrierTrackingNumber   String?        @unique
+  clientReference         String?
+  taxWith                 Int            @default(0)
+  taxNumber               String?
+  deliveryWith            String         @default("")
+  exportWith              Int            @default(0)
+  importWith              Int            @default(0)
+  shipmentAttrs           Json           @default("[]")
+  fromAddress             Json?
+  toAddress               Json?
+  shipmentStatus          ShipmentStatus @default(SUBMITTED)
+  feeStatus               FeeStatus      @default(PRECHARGED)
+  currency                Currency
+  estimatedChargeableKg   Decimal        @db.Decimal(12, 3)
+  supplierActualWeightKg  Decimal?       @db.Decimal(12, 3)
+  finalChargeableWeightKg Decimal?       @db.Decimal(12, 3)
+  supplierFinalCost       Decimal?       @db.Decimal(18, 2)
+  actualDataSource        ActualDataSource?
+  prechargedAmount        Decimal        @db.Decimal(18, 2)
+  finalReceivableAmount   Decimal?       @db.Decimal(18, 2)
+  recipientName           String
+  recipientCompany        String?
+  recipientPhone          String?
+  recipientCountryCode    String
+  recipientPostcode       String
+  recipientCity           String?
+  recipientAddressRaw     String?
+  recipientAddressLine1   String?
+  recipientAddressLine2   String?
+  recipientAddressLine3   String?
+  recipientResidential    Boolean           @default(false)
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  customer                Customer       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  service                 Service        @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  boxes                   OrderBox[]
+  feeLines                OrderFeeLine[]
+  connectorCalls          ConnectorCallLog[]
+  labels                  ShipmentLabel[]
+  billImportLines         SupplierBillImportLine[]
+  reconciliation          OrderReconciliation?
+  openApiIdempotencyRecord OpenApiIdempotencyRecord?
+  dispatchJob             ShipmentDispatchJob?
+  priceRecalculations     OrderPriceRecalculation[]
+  cancellationRefund      CancellationRefundCase?
+
+  @@index([isTest, createdAt])
+}
+
+model ShipmentLabel {
+  id             String   @id @default(cuid())
+  orderId        String
+  trackingNumber String?
+  contentType    String
+  content        Bytes
+  createdAt      DateTime @default(now())
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model ConnectorCallLog {
+  id             String              @id @default(cuid())
+  orderId        String
+  driverCode     String
+  operation      ConnectorOperation
+  status         ConnectorCallStatus
+  httpStatus     Int?
+  requestPayload Json
+  responsePayload Json?
+  errorMessage   String?
+  createdAt      DateTime            @default(now())
+  order          Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, operation, createdAt])
+}
+
+model OrderBox {
+  id         String   @id @default(cuid())
+  orderId    String
+  boxNo      String
+  reference  String?
+  weightKg   Decimal  @db.Decimal(12, 3)
+  lengthCm   Decimal  @db.Decimal(12, 2)
+  widthCm    Decimal  @db.Decimal(12, 2)
+  heightCm   Decimal  @db.Decimal(12, 2)
+  finalChargeableWeightKg Decimal? @db.Decimal(12, 3)
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items      OrderItemDeclaration[]
+
+  @@unique([orderId, boxNo])
+}
+
+model OrderItemDeclaration {
+  id                  String   @id @default(cuid())
+  boxId               String
+  chineseName         String?
+  englishName         String?
+  material            String?
+  originCountryCode   String?
+  harmonizedCode      String?
+  quantity            Int?
+  unitDeclaredValue   Decimal? @db.Decimal(18, 2)
+  declaredValueCurrency Currency?
+  sku                 String?
+  itemWeightKg        Decimal? @db.Decimal(12, 3)
+  itemLengthCm        Decimal? @db.Decimal(12, 2)
+  itemWidthCm         Decimal? @db.Decimal(12, 2)
+  itemHeightCm        Decimal? @db.Decimal(12, 2)
+  box                 OrderBox @relation(fields: [boxId], references: [id], onDelete: Cascade)
+}
+
+model ShipmentDispatchJob {
+  id           String                   @id @default(cuid())
+  orderId      String                   @unique
+  status       ShipmentDispatchJobStatus @default(PENDING)
+  attempts     Int                      @default(0)
+  errorMessage String?
+  queuedAt     DateTime                 @default(now())
+  startedAt    DateTime?
+  completedAt  DateTime?
+  claimedAt    DateTime?
+  order        Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model CancellationRefundCase {
+  id                String                   @id @default(cuid())
+  orderId           String                   @unique
+  status            CancellationRefundStatus @default(PENDING_FINANCE_CONFIRMATION)
+  currency          Currency
+  refundAmount      Decimal                  @db.Decimal(18, 2)
+  createdById       String?
+  confirmedById     String?
+  confirmationNote  String?
+  createdAt         DateTime                 @default(now())
+  confirmedAt       DateTime?
+  order             Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+}
+
+model OrderFeeLine {
+  id         String   @id @default(cuid())
+  orderId    String
+  feeType    String
+  amount     Decimal  @db.Decimal(18, 2)
+  currency   Currency
+  isFinal    Boolean  @default(false)
+  snapshot   Json
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@index([orderId, feeType])
+}
+
+model SupplierBillImportBatch {
+  id                String                   @id @default(cuid())
+  supplierId        String
+  channelId         String?
+  originalFilename  String
+  billingPeriodFrom DateTime?
+  billingPeriodTo   DateTime?
+  currency          Currency
+  status            SupplierBillImportStatus @default(MATCHED)
+  totalRows         Int                      @default(0)
+  matchedRows       Int                      @default(0)
+  unmatchedRows     Int                      @default(0)
+  createdById       String?
+  createdAt         DateTime                 @default(now())
+  appliedAt         DateTime?
+  supplier          CarrierChannel           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  channel           Supplier?                @relation(fields: [channelId], references: [id], onDelete: Restrict)
+  lines             SupplierBillImportLine[]
+
+  @@index([supplierId, createdAt])
+  @@index([channelId, createdAt])
+}
+
+model SupplierBillImportLine {
+  id                       String                  @id @default(cuid())
+  batchId                  String
+  lineNo                   Int
+  trackingNumber           String?
+  supplierActualWeightKg   Decimal?                @db.Decimal(12, 3)
+  finalChargeableWeightKg  Decimal?                @db.Decimal(12, 3)
+  supplierFinalCost        Decimal?                @db.Decimal(18, 2)
+  currency                 Currency?
+  rawData                  Json
+  matchStatus              SupplierBillMatchStatus
+  matchMessage             String?
+  orderId                  String?
+  batch                    SupplierBillImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  order                    Order?                  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  reconciliation           OrderReconciliation?
+
+  @@unique([batchId, lineNo])
+  @@index([trackingNumber])
+  @@index([orderId])
+}
+
+model OrderReconciliation {
+  id                String                   @id @default(cuid())
+  orderId           String                   @unique
+  sourceLineId      String                   @unique
+  status            ReconciliationStatus     @default(PENDING_FINANCE_CONFIRMATION)
+  prechargedAmount  Decimal                  @db.Decimal(18, 2)
+  finalAmount       Decimal?                 @db.Decimal(18, 2)
+  differenceAmount  Decimal?                 @db.Decimal(18, 2)
+  currency          Currency
+  createdById       String?
+  confirmedById     String?
+  confirmationNote  String?
+  createdAt         DateTime                 @default(now())
+  confirmedAt       DateTime?
+  order             Order                    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  sourceLine        SupplierBillImportLine   @relation(fields: [sourceLineId], references: [id], onDelete: Restrict)
+  recalculations    OrderPriceRecalculation[]
+
+  @@index([status, createdAt])
+}
+
+model OrderPriceRecalculation {
+  id                    String              @id @default(cuid())
+  reconciliationId      String
+  orderId               String
+  asOfDate              DateTime
+  calculatedAmount      Decimal             @db.Decimal(18, 2)
+  chargeableWeightsKg   Json
+  quoteSnapshot         Json
+  createdById           String?
+  createdAt             DateTime            @default(now())
+  reconciliation        OrderReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  order                 Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([reconciliationId, createdAt])
+  @@index([orderId, createdAt])
+}

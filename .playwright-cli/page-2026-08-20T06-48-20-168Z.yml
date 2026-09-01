@@ -1,0 +1,56 @@
+- generic [ref=e33]:
+  - complementary [ref=e34]:
+    - generic [ref=e35]:
+      - generic [ref=e36]:
+        - generic [ref=e37]: M
+        - generic [ref=e38]: MOVIX FREIGHT
+      - generic [ref=e39]: OPERATIONS WORKSPACE
+      - menu [ref=e40]:
+        - menuitem "file-text 订单管理" [ref=e41] [cursor=pointer]:
+          - img "file-text" [ref=e42]
+          - generic [ref=e45]: 订单管理
+        - menuitem "team 客户管理" [ref=e46] [cursor=pointer]:
+          - img "team" [ref=e47]
+          - generic [ref=e50]: 客户管理
+        - menuitem "truck 产品与渠道" [expanded] [active] [ref=e51] [cursor=pointer]:
+          - img "truck" [ref=e52]
+          - generic [ref=e55]: 产品与渠道
+        - menu [ref=e115]:
+          - menuitem "供应商与渠道" [ref=e116] [cursor=pointer]
+          - menuitem "服务管理" [ref=e118] [cursor=pointer]
+        - menuitem "wallet 报价管理" [ref=e56] [cursor=pointer]:
+          - img "wallet" [ref=e57]
+          - generic [ref=e60]: 报价管理
+        - menuitem "appstore 账单管理" [ref=e61] [cursor=pointer]:
+          - img "appstore" [ref=e62]
+          - generic [ref=e65]: 账单管理
+        - menuitem "bar-chart 数据统计" [ref=e66] [cursor=pointer]:
+          - img "bar-chart" [ref=e67]
+          - generic [ref=e70]: 数据统计
+  - generic [ref=e71]:
+    - banner [ref=e72]:
+      - generic [ref=e73]:
+        - generic [ref=e74]: FedEx 连接：SANDBOX
+        - generic [ref=e76]: 渠道区分承运商，供应商连接区分账号与环境
+      - generic [ref=e77]:
+        - button "logout 退出" [ref=e79] [cursor=pointer]:
+          - img "logout" [ref=e81]
+          - generic [ref=e84]: 退出
+        - generic [ref=e85]: M
+    - generic [ref=e88]:
+      - button [ref=e89] [cursor=pointer]:
+        - img "home" [ref=e91]
+      - button "首页" [ref=e94] [cursor=pointer]
+    - main [ref=e95]:
+      - generic [ref=e98]:
+        - generic [ref=e99]:
+          - text: MOVIX FREIGHT / OPERATIONS
+          - heading "从服务配置到面单交付。" [level=1] [ref=e100]
+          - generic [ref=e101]: 尾程渠道区分 FedEx、UPS、DPD 等承运商；供应商连接管理各账号、环境与接口，订单、报价和账单均使用同一套正式流程。
+          - generic [ref=e102]:
+            - button "查看订单" [ref=e104] [cursor=pointer]
+            - button "管理供应商与渠道" [ref=e107] [cursor=pointer]
+            - button "管理服务" [ref=e110] [cursor=pointer]
+        - generic [ref=e112]:
+          - generic [ref=e113]: READY
+          - generic [ref=e114]: FedEx 连接环境：SANDBOX

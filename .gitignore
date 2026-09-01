@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.turbo/
+.env
+.env.*.local
+config/connectors.local.json
+coverage/
+*.log
+apps/api/prisma/dev.db
