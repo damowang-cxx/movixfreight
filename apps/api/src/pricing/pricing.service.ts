@@ -46,6 +46,13 @@ export class PricingService {
     const worksheet = XLSX.utils.aoa_to_sheet([['重量段', '计价单位', ...countries], ['0-1', '按票', ...countries.map(() => '0.00')], ['1.01-2', '按票', ...countries.map(() => '0.00')], ['71.01+', '每KG', ...countries.map(() => '0.00')], row('邮编开头', countries.map(() => '')), row('最低票运费', countries.map(() => '0.00')), row('最低箱运费', countries.map(() => '0.00')), row('挂号费', countries.map(() => '0.00/票')), row('操作费', countries.map(() => '0.00/KG'))]);
     const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, worksheet, '价格矩阵'); return { filename: `${table.versionNo}-成本价格模板.xlsx`, content: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer };
   }
+  async costTableMatrixExport(tableId: string) {
+    const table = await this.costTable(tableId);
+    if (!table.rows.length) throw new BadRequestException('当前成本表尚未写入价格矩阵，无法导出当前价格表');
+    const worksheet = XLSX.utils.aoa_to_sheet(this.costMatrixRows(table));
+    const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, worksheet, '价格矩阵');
+    return { filename: `${table.versionNo}-当前成本价格表.xlsx`, content: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer };
+  }
   async replacePriceGrid(tableId: string, pastedText: string) {
     const grid = await this.parseGrid(await this.costTable(tableId), pastedText);
     await this.prisma.$transaction(async (tx) => { await tx.supplierCostRate.deleteMany({ where: { versionId: tableId } }); for (const column of grid.columns) { const rate = await tx.supplierCostRate.create({ data: { versionId: tableId, countryCode: column.countryCode, postcodeRuleType: column.postcodeRuleType, postcodeRuleStart: column.postcodeRuleStart, postcodeRuleEnd: column.postcodeRuleEnd, minimumPerShipment: column.minimumPerShipment, minimumPerBox: column.minimumPerBox, registrationFee: column.registrationFee, operationFeePerKg: column.operationFeePerKg } }); await tx.supplierCostWeightTier.createMany({ data: grid.rules.map((rule, index) => ({ costRateId: rate.id, minKg: rule.minKg, maxKg: rule.maxKg ?? '999999.999', fixedAmount: column.prices[index]!, billingUnit: rule.billingUnit })) }); } });
@@ -167,6 +174,27 @@ export class PricingService {
     const countries = await this.resolveCountryTokens(header.slice(2), 'Excel 国家列', true); const expected = new Set(table.countries.map((item) => item.countryCode)); const actual = new Set(countries.map((item) => item.code)); if (expected.size !== actual.size || [...expected].some((code) => !actual.has(code))) throw new BadRequestException('Excel 国家列必须覆盖且只能使用成本表国家组'); const rules = rows.slice(1, marker).map((row, index) => ({ ...this.parseRange(row[0]!, index + 2), billingUnit: this.parseUnit(row[1]!, index + 2) }));
     for (let index = 0; index < rules.length; index += 1) { const current = rules[index]!; const previous = rules[index - 1]; if (previous && (previous.maxKg === undefined || new Prisma.Decimal(current.minKg).lessThanOrEqualTo(previous.maxKg))) throw new BadRequestException('重量段必须从小到大且不能重叠'); if (current.maxKg === undefined && index !== rules.length - 1) throw new BadRequestException('开放上限重量段只能位于最后一行'); }
     const postcodeRow = controls.get('邮编开头')!; const shipmentRow = controls.get('最低票运费')!; const boxRow = controls.get('最低箱运费')!; const registrationRow = controls.get('挂号费')!; const operationRow = controls.get('操作费')!; const columns = countries.map((country, index) => { const column = index + 2; return { countryCode: country.code, ...this.parsePostcodeRule(postcodeRow[column]!), minimumPerShipment: this.nonNegative(shipmentRow[column]!, `${country.code} 最低票运费`), minimumPerBox: this.nonNegative(boxRow[column]!, `${country.code} 最低箱运费`), registrationFee: this.nonNegative(registrationRow[column]!, `${country.code} 挂号费`, 2, '票'), operationFeePerKg: this.nonNegative(operationRow[column]!, `${country.code} 操作费`, 4, 'KG'), prices: rows.slice(1, marker).map((row, rowIndex) => this.nonNegative(row[column]!, `第 ${rowIndex + 2} 行 ${country.code} 价格`, 4)) }; }); this.assertPostcodeRules(columns); return { rules, columns };
+  }
+
+  private costMatrixRows(table: Awaited<ReturnType<PricingService['costTable']>>): string[][] {
+    const columns = [...table.rows].sort((left, right) => `${left.countryCode}|${left.postcodeRuleType}|${left.postcodeRuleStart}`.localeCompare(`${right.countryCode}|${right.postcodeRuleType}|${right.postcodeRuleStart}`));
+    const countryNames = new Map(table.countries.map((country) => [country.countryCode, country.country.chineseName]));
+    const tierMap = new Map<string, (typeof columns)[number]['tiers'][number]>();
+    for (const column of columns) for (const tier of column.tiers) tierMap.set(`${tier.minKg.toString()}|${tier.maxKg.toString()}|${tier.billingUnit}`, tier);
+    const tiers = [...tierMap.values()].sort((left, right) => left.minKg.comparedTo(right.minKg) || left.maxKg.comparedTo(right.maxKg));
+    const valueAt = (column: (typeof columns)[number], tier: (typeof tiers)[number]) => column.tiers.find((item) => item.minKg.equals(tier.minKg) && item.maxKg.equals(tier.maxKg) && item.billingUnit === tier.billingUnit)?.fixedAmount.toString() ?? '';
+    const unit = (value: CostBillingUnit) => value === CostBillingUnit.PER_SHIPMENT ? '按票' : value === CostBillingUnit.PER_BOX ? '按箱' : '每KG';
+    const range = (tier: (typeof tiers)[number]) => tier.maxKg.greaterThanOrEqualTo('999999') ? `${tier.minKg.toString()}+` : `${tier.minKg.toString()}-${tier.maxKg.toString()}`;
+    const postcode = (column: (typeof columns)[number]) => column.postcodeRuleType === CostPostcodeRuleType.DEFAULT ? '' : column.postcodeRuleType === CostPostcodeRuleType.EXACT ? column.postcodeRuleStart : `${column.postcodeRuleStart}-${column.postcodeRuleEnd}`;
+    return [
+      ['重量段', '计价单位', ...columns.map((column) => countryNames.get(column.countryCode) ?? column.countryCode)],
+      ...tiers.map((tier) => [range(tier), unit(tier.billingUnit), ...columns.map((column) => valueAt(column, tier))]),
+      ['邮编开头', '', ...columns.map(postcode)],
+      ['最低票运费', '', ...columns.map((column) => column.minimumPerShipment.toString())],
+      ['最低箱运费', '', ...columns.map((column) => column.minimumPerBox.toString())],
+      ['挂号费', '', ...columns.map((column) => `${column.registrationFee.toString()}/票`)],
+      ['操作费', '', ...columns.map((column) => `${column.operationFeePerKg.toString()}/KG`)],
+    ];
   }
 
   private matchPriceColumn<T extends { countryCode: string; postcodeRuleType: CostPostcodeRuleType; postcodeRuleStart: string; postcodeRuleEnd: string | null }>(rows: T[], postcode: string | undefined, countryCode: string, versionNo: string): T { const normalized = this.normalizePostcode(postcode); const specific = rows.filter((row) => row.postcodeRuleType === CostPostcodeRuleType.EXACT ? Boolean(normalized) && normalized === row.postcodeRuleStart : row.postcodeRuleType === CostPostcodeRuleType.NUMERIC_RANGE ? this.inNumericRange(normalized, row.postcodeRuleStart, row.postcodeRuleEnd!) : false); if (specific.length > 1) throw new ConflictException(`成本表 ${versionNo} 的 ${countryCode} 邮编 ${normalized || '空'} 命中多个具体价格列`); if (specific.length === 1) return specific[0]!; const defaults = rows.filter((row) => row.postcodeRuleType === CostPostcodeRuleType.DEFAULT); if (defaults.length > 1) throw new ConflictException(`成本表 ${versionNo} 的 ${countryCode} 存在多个默认价格列`); if (defaults.length === 1) return defaults[0]!; throw new NotFoundException(`成本表 ${versionNo} 的 ${countryCode} 邮编 ${normalized || '空'} 暂无可用成本价格`); }

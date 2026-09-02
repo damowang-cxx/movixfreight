@@ -12,13 +12,17 @@ export class CustomersService {
   constructor(private readonly prisma: PrismaService, private readonly balanceAlerts: BalanceAlertsService) {}
 
   async createByAdmin(input: CreateCustomerDto) {
-    const exists = await this.prisma.customer.findUnique({ where: { username: input.username } });
-    if (exists) throw new ConflictException('用户名已存在');
+    const [sameCustomerNo, sameUsername] = await Promise.all([
+      this.prisma.customer.findUnique({ where: { customerNo: input.customerNo } }),
+      this.prisma.customer.findUnique({ where: { username: input.username } }),
+    ]);
+    if (sameCustomerNo) throw new ConflictException('客户 ID 已存在');
+    if (sameUsername) throw new ConflictException('用户名已存在');
 
     const passwordHash = await hash(input.password, 12);
     return this.prisma.customer.create({
       data: {
-        customerNo: this.createNumber('CUS'),
+        customerNo: input.customerNo,
         username: input.username,
         passwordHash,
         status: CustomerStatus.NORMAL,

@@ -39,6 +39,13 @@ export class PricingAdminController {
     response.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(template.filename)}"`);
     response.send(template.content);
   }
+  @Get('cost-tables/:tableId/matrix-export')
+  async costTableMatrixExport(@Param('tableId') tableId: string, @Res() response: Response) {
+    const exportFile = await this.pricing.costTableMatrixExport(tableId);
+    response.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    response.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(exportFile.filename)}"`);
+    response.send(exportFile.content);
+  }
   @Post('cost-tables/:tableId/price-grid/preview') previewGrid(@Param('tableId') tableId: string, @Body() input: PriceGridDto) { return this.pricing.previewPriceGrid(tableId, input.pastedText); }
   @Post('cost-tables/:tableId/price-grid/replace') replaceGrid(@Param('tableId') tableId: string, @Body() input: PriceGridDto) { return this.pricing.replacePriceGrid(tableId, input.pastedText); }
   @Get('profit-services') profitServices() { return this.pricing.profitServices(); }
