@@ -84,5 +84,6 @@ pnpm build
 - [FedEx 中转站接入说明](./docs/system-design/12-fedex-relay-integration.md)
 - [生产部署与 FedEx Production 上线](./docs/production-deployment.md)
 - [Ubuntu 24.04 已验证部署方案](./docs/ubuntu-24.04-verified-deployment.md)
+- [生产更新脚本](./infra/scripts/update-production.sh)
 - [Open API v1 接入说明](./docs/open-api-v1.md)
 - [实施记录](./docs/implementation-log.md)

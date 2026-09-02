@@ -241,7 +241,34 @@ curl -I https://movixfreight.com/admin/
 - 根路径是客户门户，调用 `POST /api/auth/customer/login`；将管理员账号填入客户门户会得到正常的 `401`。
 - 新版本有严重故障时，恢复 `movixfreight.bak-<时间戳>`，`nginx -t` 后 reload，即可切回尚在运行的 3333 旧服务。Nginx 回滚不等于数据库或真实业务数据回滚。
 
-## 9. 备份与日常操作
+## 9. 一键更新、备份与日常操作
+
+仓库提供两个服务器运维脚本：
+
+```bash
+chmod 700 infra/scripts/backup-production.sh infra/scripts/update-production.sh
+```
+
+日常更新顺序为：本地完成验证并推送 GitHub 后，服务器只需执行：
+
+```bash
+cd ~/movixfreight
+./infra/scripts/update-production.sh
+```
+
+脚本会校验 Compose、拉取远程提交、发现数据库目录变更时安全停止、检查是否存在 `PROCESSING` 自动打单任务、备份 PostgreSQL、重建容器并轮询本机 API 就绪状态。确认提示可用 `--yes` 跳过：
+
+```bash
+./infra/scripts/update-production.sh --yes
+```
+
+如果更新涉及 `apps/api/prisma/`，脚本会在拉取前停止；必须按数据库变更流程手工审查/执行 SQL，不能让脚本自动执行 `db push`。
+
+单独备份数据库：
+
+```bash
+./infra/scripts/backup-production.sh
+```
 
 每日备份数据库到 `/var/backups/movixfreight`，并保留 14 天：
 
