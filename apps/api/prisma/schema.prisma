@@ -128,6 +128,7 @@ enum ShipmentDispatchJobStatus {
   COMPLETED
   FAILED
   UNKNOWN
+  BLOCKED
 }
 
 enum PriceVersionStatus {
@@ -632,6 +633,7 @@ model Order {
   recipientCountryCode    String
   recipientPostcode       String
   recipientCity           String?
+  recipientState          String?
   recipientAddressRaw     String?
   recipientAddressLine1   String?
   recipientAddressLine2   String?
@@ -722,12 +724,16 @@ model ShipmentDispatchJob {
   id           String                   @id @default(cuid())
   orderId      String                   @unique
   status       ShipmentDispatchJobStatus @default(PENDING)
+  stage        String?
+  reasonCode   String?
+  publicMessage String?
   attempts     Int                      @default(0)
   errorMessage String?
   queuedAt     DateTime                 @default(now())
   startedAt    DateTime?
   completedAt  DateTime?
   claimedAt    DateTime?
+  updatedAt    DateTime                 @updatedAt
   order        Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 

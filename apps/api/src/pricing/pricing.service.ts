@@ -21,6 +21,14 @@ export class PricingService {
 
   private async ensureCountries() { await this.prisma.country.createMany({ data: EUROPEAN_COUNTRIES.map(([code, chineseName]) => ({ code, chineseName })), skipDuplicates: true }); }
   async countries() { await this.ensureCountries(); return this.prisma.country.findMany({ orderBy: { code: 'asc' } }); }
+  async resolveDestinationCountry(value: string) {
+    const normalized = value.trim();
+    if (!normalized) throw new BadRequestException('目的国家不能为空');
+    await this.ensureCountries();
+    const country = await this.prisma.country.findFirst({ where: { enabled: true, OR: [{ code: normalized.toUpperCase() }, { chineseName: normalized }] } });
+    if (!country) throw new BadRequestException(`目的国家“${value}”不存在或已停用，请在国家表中维护后重试`);
+    return country.code;
+  }
   async createCountry(input: { code: string; chineseName: string }) { const code = input.code.trim().toUpperCase(); const chineseName = input.chineseName.trim(); if (!/^[A-Z]{2}$/.test(code) || !chineseName) throw new BadRequestException('国家代码必须为两位字母，中文国家名不能为空'); try { return await this.prisma.country.create({ data: { code, chineseName } }); } catch { throw new ConflictException('国家代码或中文国家名已存在'); } }
   async setCountryEnabled(code: string, enabled: boolean) { await this.ensureCountries(); return this.prisma.country.update({ where: { code: code.toUpperCase() }, data: { enabled } }); }
 
@@ -60,7 +68,7 @@ export class PricingService {
   }
 
   async quote(customerId: string, serviceId: string, countryCode: string, chargeableWeightsKg: string[], postcode?: string, boxes: QuoteBoxDimensions[] = [], options: QuoteOptions = {}) {
-    const now = options.asOf ?? new Date(); const destination = countryCode.trim().toUpperCase(); const service = await this.prisma.service.findUnique({ where: { id: serviceId }, include: { supplier: { include: { carrier: { include: { fuelSurcharges: { where: { effectiveFrom: { lte: now }, effectiveTo: { gte: now } } } } } } }, remoteAreaTemplate: { include: { rules: true } } } }); if (!service?.enabled || !service.supplier.enabled || !service.supplier.carrier.enabled) throw new NotFoundException('可用服务不存在');
+    const now = options.asOf ?? new Date(); const destination = await this.resolveDestinationCountry(countryCode); const service = await this.prisma.service.findUnique({ where: { id: serviceId }, include: { supplier: { include: { carrier: { include: { fuelSurcharges: { where: { effectiveFrom: { lte: now }, effectiveTo: { gte: now } } } } } } }, remoteAreaTemplate: { include: { rules: true } } } }); if (!service?.enabled || !service.supplier.enabled || !service.supplier.carrier.enabled) throw new NotFoundException('可用服务不存在');
     const volumesM3 = boxes.map((box) => calculateVolumeM3(box.lengthCm, box.widthCm, box.heightCm)); let quotedWeightsKg = chargeableWeightsKg;
     if (service.billingMethod === BillingMethod.MAX_ACTUAL_OR_VOLUMETRIC && !options.useProvidedChargeableWeights) { const divisor = service.volumetricDivisor; if (!divisor || !volumesM3.length) throw new NotFoundException('该服务缺少计抛系数或箱子尺寸'); const volumetricWeights = boxes.map((box) => calculateVolumetricWeightKg(box.lengthCm, box.widthCm, box.heightCm, divisor.toString())); if (chargeableWeightsKg.length !== volumetricWeights.length) throw new NotFoundException('重量与箱子尺寸数量不一致'); quotedWeightsKg = chargeableWeightsKg.map((weight, index) => maxChargeableWeight(weight, volumetricWeights[index]!)); }
     if (service.billingMethod === BillingMethod.VOLUME) throw new BadRequestException('当前成本表格式首期不支持按体积计费服务');

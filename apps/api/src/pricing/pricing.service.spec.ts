@@ -13,9 +13,17 @@ function service() {
     country: {
       createMany: async () => ({ count: 0 }),
       findMany: async () => countries,
+      findFirst: async ({ where }: any) => countries.find((country) => country.enabled && where.OR.some((condition: any) => condition.code === country.code || condition.chineseName === country.chineseName)) ?? null,
     },
   } as any);
 }
+
+test('目的国家可用中文名或 ISO 两位代码映射，停用国家会被拒绝', async () => {
+  const pricing = service();
+  assert.equal(await pricing.resolveDestinationCountry('荷兰'), 'NL');
+  assert.equal(await pricing.resolveDestinationCountry('fr'), 'FR');
+  await assert.rejects(() => pricing.resolveDestinationCountry('不存在的国家'), /不存在或已停用/);
+});
 
 const table = { countries: countries.map((country) => ({ countryCode: country.code, country })) } as any;
 

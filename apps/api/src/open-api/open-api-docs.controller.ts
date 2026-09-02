@@ -100,7 +100,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
     },
     "from_address": {},
     "parcels": [{
-      "number": "1", "reference": "FBA-BOX-001",
+      "reference": "FBA-BOX-001",
       "client_weight": 1.2, "client_length": 20,
       "client_width": 15, "client_height": 10,
       "declarations": [{
@@ -119,6 +119,12 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
     "shipment_id": "ORD-20260824-XXXXXXXX",
     "client_reference": "ERP-20260824-001",
     "label_status": "PENDING",
+    "label_status_message": "下单成功，正在等待面单生成",
+    "dispatch": {
+      "status": "PENDING", "stage": "QUEUED",
+      "message": "下单成功，正在等待面单生成",
+      "reasonCode": "QUEUED", "retryAllowed": false
+    },
     "label_status_url": "/api/open/v1/shipments/ORD-.../label",
     "label_download_url": "/api/open/v1/shipments/ORD-.../label/download"
   }}
@@ -126,7 +132,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
         </section>
         <section id="label">
           <h2>查询与下载面单</h2>
-          <div class="endpoint"><div class="endpoint-title"><span class="method get">GET</span><code>/shipments/:shipmentId/label</code></div><div class="endpoint-body"><p>返回 <code>PENDING</code>、<code>READY</code>、<code>FAILED</code> 或 <code>UNKNOWN</code>。<code>READY</code> 时返回转单号、面单数量和每张面单的下载地址。</p></div></div>
+          <div class="endpoint"><div class="endpoint-title"><span class="method get">GET</span><code>/shipments/:shipmentId/label</code></div><div class="endpoint-body"><p>返回 <code>PENDING</code>、<code>READY</code>、<code>FAILED</code> 或 <code>UNKNOWN</code>，并提供可直接展示的 <code>label_status_message</code>。<code>dispatch.status</code> 进一步表示等待队列、校验中、生成中、已生成、失败、结果未知、超过 10 分钟待核查或当前驱动不支持；<code>dispatch.message</code> 与 <code>reasonCode</code> 可用于页面提示和程序处理。<code>READY</code> 时返回转单号、面单数量和每张面单的下载地址。</p></div></div>
           <div class="endpoint"><div class="endpoint-title"><span class="method get">GET</span><code>/shipments/:shipmentId/label/download?label_id=...</code></div><div class="endpoint-body"><p>仅 <code>READY</code> 状态可下载 PDF。单箱可省略 <code>label_id</code>；多箱必须使用状态接口返回的具体 <code>label_id</code>。</p></div></div>
         </section>
         <section id="rules">
@@ -134,8 +140,9 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
           <table><thead><tr><th>字段</th><th>规则</th></tr></thead><tbody>
             <tr><td>service</td><td>系统中启用、且该客户可下单的服务代码。</td></tr>
             <tr><td>to_address</td><td>必填。<code>name</code>、<code>city</code>、<code>country</code>、<code>postcode</code>、至少一个地址字段，以及 <code>tel</code>/<code>mobile</code> 至少一个必填。<code>address_1/2/3</code> 会合并后重新分配为最多三段，每段不超过 20 个字符，且不会拆分完整单词。</td></tr>
-            <tr><td>country</td><td>支持系统欧洲国家的中文或英文名称，系统统一映射 ISO 两位代码。</td></tr>
-            <tr><td>parcels</td><td><code>parcel_count</code> 必须等于数组长度；箱号不可重复；重量、长、宽、高均大于 0。</td></tr>
+            <tr><td>country</td><td>支持启用国家表中的中文名、ISO 两位代码及既有英文名称，系统统一映射 ISO 两位代码。</td></tr>
+            <tr><td>state / state_code</td><td>均为可选；同时提供时优先使用 <code>state_code</code>，并在 FedEx 请求中传为省/州代码。</td></tr>
+            <tr><td>parcels</td><td><code>parcel_count</code> 必须等于数组长度；<code>number</code> 可留空，系统会生成订单号前缀箱号；已填写的箱号不可重复；重量、长、宽、高均大于 0。</td></tr>
             <tr><td>declarations</td><td>每项 <code>name_cn</code>、<code>name_en</code> 必填。FedEx 额外强制原产国、HS 编码、数量、单价及申报币种。</td></tr>
             <tr><td>taxwith</td><td>仅 <code>0–4</code>；值为 <code>3</code> 或 <code>4</code> 时必须提供 <code>tax_number</code>。</td></tr>
             <tr><td>declaration_currency</td><td>仅支持 <code>EUR</code>、<code>GBP</code>。</td></tr>

@@ -1,20 +1,21 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ChannelEnvironment, CustomerStatus, FeeStatus, MeasurementMethod, Prisma, ShipmentStatus, WalletLedgerType } from '@prisma/client';
+import { ChannelEnvironment, CustomerStatus, FeeStatus, MeasurementMethod, Prisma, ShipmentDispatchJobStatus, ShipmentStatus, WalletLedgerType } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { PricingService } from '../pricing/pricing.service';
 import { BalanceAlertsService } from '../balance-alerts/balance-alerts.service';
 import { SettingsService, type DeclarationFieldCode } from '../settings/settings.service';
 import { normalizeRecipientAddress } from './recipient-address';
+import { ShipmentDispatchQueueService } from '../open-api/shipment-dispatch-queue.service';
 
 export type ItemInput = { chineseName?: string; englishName?: string; material?: string; originCountryCode?: string; harmonizedCode?: string; quantity?: number; unitDeclaredValue?: string; declaredValueCurrency?: 'EUR' | 'GBP'; sku?: string; itemWeightKg?: string; itemLengthCm?: string; itemWidthCm?: string; itemHeightCm?: string };
-export type BoxInput = { boxNo: string; reference?: string; weightKg: string; lengthCm: string; widthCm: string; heightCm: string; items: ItemInput[] };
-export type CreateOrderInput = { idempotencyKey: string; serviceId: string; recipientName: string; recipientCompany?: string; recipientPhone?: string; recipientCountryCode: string; recipientPostcode: string; recipientCity: string; recipientAddress?: string; recipientAddressLine1?: string; recipientAddressLine2?: string; recipientAddressLine3?: string; recipientResidential?: boolean; estimatedChargeableKg: string; boxes: BoxInput[]; clientReference?: string; taxWith?: number; taxNumber?: string; deliveryWith?: string; exportWith?: number; importWith?: number; shipmentAttrs?: string[]; fromAddress?: Record<string, unknown>; toAddress?: Record<string, unknown> };
+export type BoxInput = { boxNo?: string; reference?: string; weightKg: string; lengthCm: string; widthCm: string; heightCm: string; items: ItemInput[] };
+export type CreateOrderInput = { idempotencyKey: string; serviceId: string; recipientName: string; recipientCompany?: string; recipientPhone?: string; recipientCountryCode: string; recipientPostcode: string; recipientCity: string; recipientState?: string; recipientAddress?: string; recipientAddressLine1?: string; recipientAddressLine2?: string; recipientAddressLine3?: string; recipientResidential?: boolean; estimatedChargeableKg: string; boxes: BoxInput[]; clientReference?: string; taxWith?: number; taxNumber?: string; deliveryWith?: string; exportWith?: number; importWith?: number; shipmentAttrs?: string[]; fromAddress?: Record<string, unknown>; toAddress?: Record<string, unknown> };
 export type ImportOrderRow = { rowNo: number; customerId: string; order: Omit<CreateOrderInput, 'idempotencyKey'> };
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService, private readonly pricing: PricingService, private readonly balanceAlerts: BalanceAlertsService, private readonly settings: SettingsService) {}
+  constructor(private readonly prisma: PrismaService, private readonly pricing: PricingService, private readonly balanceAlerts: BalanceAlertsService, private readonly settings: SettingsService, private readonly dispatchQueue?: ShipmentDispatchQueueService) {}
 
   async createForCustomer(customerId: string, input: CreateOrderInput, options: { allowSandbox?: boolean } = {}) {
     if (!input.boxes.length) throw new BadRequestException('至少需要一个箱号');
@@ -26,19 +27,24 @@ export class OrdersService {
     const service = await this.prisma.service.findUnique({ where: { id: input.serviceId }, include: { supplier: true } });
     if (!service?.enabled || !service.supplier.enabled) throw new NotFoundException('服务不存在、已停用或供应商连接不可用');
     if (!options.allowSandbox && service.supplier.environment !== ChannelEnvironment.PRODUCTION) throw new ForbiddenException('普通客户仅可使用已启用的生产服务');
-    await this.assertShipmentInput(input, service.supplier.driverCode);
-    if (!service.allowsMultiPiece && input.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
-    if (input.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
-    const quoteWeights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [input.estimatedChargeableKg] : input.boxes.map((box) => box.weightKg);
-    const quote = await this.pricing.quote(customerId, input.serviceId, input.recipientCountryCode, quoteWeights, input.recipientPostcode, input.boxes);
+    const orderNo = this.number('ORD');
+    const normalizedInput = { ...input, recipientCountryCode: await this.pricing.resolveDestinationCountry(input.recipientCountryCode), recipientState: input.recipientState?.trim() || undefined, boxes: this.normalizeBoxNumbers(input.boxes, orderNo) };
+    await this.assertShipmentInput(normalizedInput, service.supplier.driverCode);
+    if (!service.allowsMultiPiece && normalizedInput.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
+    if (normalizedInput.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
+    const quoteWeights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [normalizedInput.estimatedChargeableKg] : normalizedInput.boxes.map((box) => box.weightKg);
+    const quote = await this.pricing.quote(customerId, normalizedInput.serviceId, normalizedInput.recipientCountryCode, quoteWeights, normalizedInput.recipientPostcode, normalizedInput.boxes);
     const precharge = new Prisma.Decimal(quote.total);
-    return this.prisma.$transaction(async (tx) => {
+    const order = await this.prisma.$transaction(async (tx) => {
       const customer = await tx.customer.findUnique({ where: { id: customerId }, include: { wallets: true } });
       if (!customer) throw new NotFoundException('客户不存在');
       if (customer.status === CustomerStatus.FROZEN || customer.status === CustomerStatus.REJECTED || customer.status === CustomerStatus.PENDING_REVIEW || customer.status === CustomerStatus.PENDING_RECHARGE_VERIFICATION) throw new ForbiddenException('当前客户状态不可下单');
       const wallet = customer.wallets.find((item) => item.currency === quote.currency);
       if (!wallet || wallet.balance.lessThan(precharge) || wallet.balance.lessThan(0)) throw new ForbiddenException(`${quote.currency} 余额不足，无法创建订单`);
-      const order = await tx.order.create({ data: { orderNo: this.number('ORD'), idempotencyKey: input.idempotencyKey, customerId, serviceId: input.serviceId, shipmentStatus: ShipmentStatus.SUBMITTED, feeStatus: FeeStatus.PRECHARGED, currency: quote.currency, estimatedChargeableKg: input.estimatedChargeableKg, prechargedAmount: precharge, recipientName: input.recipientName, recipientCompany: input.recipientCompany, recipientPhone: input.recipientPhone, recipientCountryCode: input.recipientCountryCode, recipientPostcode: input.recipientPostcode, recipientCity: input.recipientCity, recipientAddressRaw: recipientAddress.raw, recipientAddressLine1: recipientAddress.line1, recipientAddressLine2: recipientAddress.line2, recipientAddressLine3: recipientAddress.line3, recipientResidential: input.recipientResidential ?? false, clientReference: input.clientReference?.trim() || null, taxWith: input.taxWith ?? 0, taxNumber: input.taxNumber?.trim() || null, deliveryWith: input.deliveryWith ?? '', exportWith: input.exportWith ?? 0, importWith: input.importWith ?? 0, shipmentAttrs: (input.shipmentAttrs ?? []) as Prisma.InputJsonValue, fromAddress: input.fromAddress as Prisma.InputJsonValue | undefined, toAddress: input.toAddress as Prisma.InputJsonValue | undefined, boxes: { create: input.boxes.map((box) => ({ ...box, items: { create: box.items.map((item) => this.normalizeItem(item)) } })) }, ...(service.supplier.environment === ChannelEnvironment.PRODUCTION && !options.allowSandbox ? { dispatchJob: { create: {} } } : {}), feeLines: { create: [
+      const dispatchJob = service.supplier.driverCode === 'FEDEX_RELAY'
+        ? { create: { status: ShipmentDispatchJobStatus.PENDING, stage: 'QUEUED', reasonCode: 'QUEUED', publicMessage: '订单已受理，正在等待面单生成' } }
+        : { create: { status: ShipmentDispatchJobStatus.BLOCKED, stage: 'UNSUPPORTED', reasonCode: 'DRIVER_NOT_SUPPORTED', publicMessage: '当前供应商连接暂不支持自动生成面单' } };
+      const order = await tx.order.create({ data: { orderNo, idempotencyKey: normalizedInput.idempotencyKey, customerId, serviceId: normalizedInput.serviceId, shipmentStatus: ShipmentStatus.SUBMITTED, feeStatus: FeeStatus.PRECHARGED, currency: quote.currency, estimatedChargeableKg: normalizedInput.estimatedChargeableKg, prechargedAmount: precharge, recipientName: normalizedInput.recipientName, recipientCompany: normalizedInput.recipientCompany, recipientPhone: normalizedInput.recipientPhone, recipientCountryCode: normalizedInput.recipientCountryCode, recipientPostcode: normalizedInput.recipientPostcode, recipientCity: normalizedInput.recipientCity, recipientState: normalizedInput.recipientState ?? null, recipientAddressRaw: recipientAddress.raw, recipientAddressLine1: recipientAddress.line1, recipientAddressLine2: recipientAddress.line2, recipientAddressLine3: recipientAddress.line3, recipientResidential: normalizedInput.recipientResidential ?? false, clientReference: normalizedInput.clientReference?.trim() || null, taxWith: normalizedInput.taxWith ?? 0, taxNumber: normalizedInput.taxNumber?.trim() || null, deliveryWith: normalizedInput.deliveryWith ?? '', exportWith: normalizedInput.exportWith ?? 0, importWith: normalizedInput.importWith ?? 0, shipmentAttrs: (normalizedInput.shipmentAttrs ?? []) as Prisma.InputJsonValue, fromAddress: normalizedInput.fromAddress as Prisma.InputJsonValue | undefined, toAddress: normalizedInput.toAddress as Prisma.InputJsonValue | undefined, boxes: { create: normalizedInput.boxes.map((box) => ({ ...box, items: { create: box.items.map((item) => this.normalizeItem(item)) } })) }, dispatchJob, feeLines: { create: [
         { feeType: 'SUPPLIER_WEIGHT_FREIGHT', amount: quote.weightFreight, currency: quote.currency, snapshot: { costVersion: quote.costVersion, priceColumn: quote.priceColumn } },
         { feeType: 'SUPPLIER_MINIMUM_BOX_ADJUSTMENT', amount: quote.minimumPerBoxAdjustment, currency: quote.currency, snapshot: { costVersion: quote.costVersion, priceColumn: quote.priceColumn } },
         { feeType: 'SUPPLIER_MINIMUM_SHIPMENT_ADJUSTMENT', amount: quote.minimumPerShipmentAdjustment, currency: quote.currency, snapshot: { costVersion: quote.costVersion, priceColumn: quote.priceColumn } },
@@ -53,9 +59,14 @@ export class OrdersService {
       await this.balanceAlerts.evaluateInTransaction(tx, { customerId: customer.id, customerNo: customer.customerNo, username: customer.username, walletId: wallet.id, currency: wallet.currency, balance: after });
       return order;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    if (service.supplier.driverCode === 'FEDEX_RELAY') await this.dispatchQueue?.enqueue(order.id).catch(() => undefined);
+    return order;
   }
 
-  listForCustomer(customerId: string) { return this.prisma.order.findMany({ where: { customerId }, include: { service: { select: { code: true, name: true } }, feeLines: true, labels: { select: { id: true, trackingNumber: true, contentType: true, createdAt: true } } }, orderBy: { createdAt: 'desc' } }); }
+  async listForCustomer(customerId: string) {
+    const orders = await this.prisma.order.findMany({ where: { customerId }, include: { service: { select: { code: true, name: true } }, feeLines: true, labels: { select: { id: true, trackingNumber: true, contentType: true, createdAt: true } }, dispatchJob: true }, orderBy: { createdAt: 'desc' } });
+    return orders.map((order) => ({ ...order, dispatch: this.dispatchSummary(order, false), dispatchJob: undefined }));
+  }
   createForAdmin(customerId: string, input: CreateOrderInput) { return this.createForCustomer(customerId, input, { allowSandbox: true }); }
   async previewImportForAdmin(rows: ImportOrderRow[]) {
     return Promise.all(rows.map(async (row) => {
@@ -65,11 +76,12 @@ export class OrdersService {
         if (customer.status !== CustomerStatus.NORMAL) throw new ForbiddenException('客户状态不可下单');
         const service = await this.prisma.service.findUnique({ where: { id: row.order.serviceId }, include: { supplier: true } });
         if (!service?.enabled) throw new NotFoundException('服务不存在或已停用');
-        await this.assertShipmentInput(row.order as CreateOrderInput, service.supplier.driverCode);
-        if (!service.allowsMultiPiece && row.order.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
-        if (row.order.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
-        const weights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [row.order.estimatedChargeableKg] : row.order.boxes.map((box) => box.weightKg);
-        const quote = await this.pricing.quote(row.customerId, row.order.serviceId, row.order.recipientCountryCode, weights, row.order.recipientPostcode, row.order.boxes);
+        const previewOrder = { ...row.order, boxes: this.normalizeBoxNumbers(row.order.boxes, `PREVIEW-${row.rowNo}`) } as CreateOrderInput;
+        await this.assertShipmentInput(previewOrder, service.supplier.driverCode);
+        if (!service.allowsMultiPiece && previewOrder.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
+        if (previewOrder.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
+        const weights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [previewOrder.estimatedChargeableKg] : previewOrder.boxes.map((box) => box.weightKg);
+        const quote = await this.pricing.quote(row.customerId, previewOrder.serviceId, previewOrder.recipientCountryCode, weights, previewOrder.recipientPostcode, previewOrder.boxes);
         const wallet = customer.wallets.find((item) => item.currency === quote.currency);
         if (!wallet || wallet.balance.lessThan(quote.total) || wallet.balance.lessThan(0)) throw new ForbiddenException(`${quote.currency} 余额不足`);
         return { rowNo: row.rowNo, status: 'READY' as const, currency: quote.currency, estimatedReceivable: quote.total };
@@ -81,13 +93,23 @@ export class OrdersService {
     for (const row of rows) {
       try {
         const idempotencyKey = `excel-${createHash('sha256').update(JSON.stringify({ sourceFileName, rowNo: row.rowNo, customerId: row.customerId, order: row.order })).digest('hex').slice(0, 48)}`;
-        const order = await this.createForAdmin(row.customerId, { ...row.order, idempotencyKey });
-        results.push({ rowNo: row.rowNo, status: 'CREATED' as const, orderId: order.id, orderNo: order.orderNo });
+      const order = await this.createForAdmin(row.customerId, { ...row.order, idempotencyKey });
+        results.push({
+          rowNo: row.rowNo,
+          status: 'CREATED' as const,
+          orderId: order.id,
+          orderNo: order.orderNo,
+          labelStatus: 'PENDING' as const,
+          message: '下单成功，已完成预扣，正在自动校验并生成面单。',
+        });
       } catch (error) { results.push({ rowNo: row.rowNo, status: 'ERROR' as const, error: error instanceof Error ? error.message : '导入失败' }); }
     }
     return results;
   }
-  listForAdmin() { return this.prisma.order.findMany({ include: { customer: { select: { id: true, customerNo: true, username: true } }, service: { select: { id: true, code: true, name: true, carrierServiceType: true, supplier: { select: { driverCode: true, environment: true, carrier: { select: { name: true } } } } } }, labels: { select: { id: true, trackingNumber: true, contentType: true, createdAt: true } } }, orderBy: { createdAt: 'desc' } }); }
+  async listForAdmin() {
+    const orders = await this.prisma.order.findMany({ include: { customer: { select: { id: true, customerNo: true, username: true } }, service: { select: { id: true, code: true, name: true, carrierServiceType: true, supplier: { select: { driverCode: true, environment: true, carrier: { select: { name: true } } } } } }, labels: { select: { id: true, trackingNumber: true, contentType: true, createdAt: true } }, dispatchJob: true }, orderBy: { createdAt: 'desc' } });
+    return orders.map((order) => ({ ...order, dispatch: this.dispatchSummary(order, true) }));
+  }
   async getForAdmin(orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -96,39 +118,90 @@ export class OrdersService {
         service: { include: { supplier: { include: { carrier: { select: { code: true, name: true } } } } } },
         boxes: { include: { items: true } }, feeLines: true,
         labels: { select: { id: true, trackingNumber: true, contentType: true, createdAt: true } },
-        connectorCalls: { orderBy: { createdAt: 'desc' }, take: 20 },
+        connectorCalls: { orderBy: { createdAt: 'desc' }, take: 20 }, dispatchJob: true,
       },
     });
     if (!order) throw new NotFoundException('订单不存在');
-    return order;
+    return { ...order, dispatch: this.dispatchSummary(order, true) };
   }
   async getLabelForAdmin(orderId: string, labelId: string) { const label = await this.prisma.shipmentLabel.findFirst({ where: { id: labelId, orderId }, select: { id: true, trackingNumber: true, contentType: true, content: true } }); if (!label) throw new NotFoundException('面单不存在'); return label; }
-  async getForCustomer(customerId: string, orderId: string) { const order = await this.prisma.order.findFirst({ where: { id: orderId, customerId }, include: { service: true, boxes: { include: { items: true } }, feeLines: true, labels: { select: { id: true, trackingNumber: true, contentType: true, createdAt: true } } } }); if (!order) throw new NotFoundException('订单不存在'); return order; }
+  async getForCustomer(customerId: string, orderId: string) { const order = await this.prisma.order.findFirst({ where: { id: orderId, customerId }, include: { service: true, boxes: { include: { items: true } }, feeLines: true, labels: { select: { id: true, trackingNumber: true, contentType: true, createdAt: true } }, dispatchJob: true } }); if (!order) throw new NotFoundException('订单不存在'); return { ...order, dispatch: this.dispatchSummary(order, false), dispatchJob: undefined }; }
+  async dispatchStatusesForAdmin(orderIds: string[]) {
+    const orders = await this.loadDispatchOrders(orderIds);
+    return orders.map((order) => ({ orderId: order.id, orderNo: order.orderNo, dispatch: this.dispatchSummary(order, true) }));
+  }
+  async dispatchStatusesForCustomer(customerId: string, orderIds: string[]) {
+    const ids = this.normalizedOrderIds(orderIds);
+    const orders = await this.prisma.order.findMany({ where: { id: { in: ids }, customerId }, include: { labels: { select: { id: true } }, dispatchJob: true } });
+    return orders.map((order) => ({ orderId: order.id, orderNo: order.orderNo, dispatch: this.dispatchSummary(order, false) }));
+  }
   async getLabelForCustomer(customerId: string, orderId: string, labelId: string) {
     const label = await this.prisma.shipmentLabel.findFirst({ where: { id: labelId, orderId, order: { customerId } }, select: { id: true, trackingNumber: true, contentType: true, content: true } });
     if (!label) throw new NotFoundException('面单不存在或无权访问'); return label;
+  }
+
+  private async loadDispatchOrders(orderIds: string[]) {
+    const ids = this.normalizedOrderIds(orderIds);
+    return this.prisma.order.findMany({ where: { id: { in: ids } }, include: { labels: { select: { id: true } }, dispatchJob: true } });
+  }
+
+  private normalizedOrderIds(orderIds: string[]) {
+    const ids = [...new Set(orderIds.map((value) => value.trim()).filter(Boolean))];
+    if (ids.length > 100) throw new BadRequestException('单次最多查询 100 个订单状态');
+    return ids;
+  }
+
+  dispatchSummary(order: { shipmentStatus: ShipmentStatus; labels: Array<unknown>; dispatchJob: any }, admin: boolean) {
+    const job = order.dispatchJob;
+    const terminalOrderStatus = order.shipmentStatus;
+    const now = Date.now();
+    const base = { retryAllowed: false };
+    if (terminalOrderStatus === ShipmentStatus.GENERATED || (job?.status === ShipmentDispatchJobStatus.COMPLETED && order.labels.length > 0)) return { ...base, status: 'READY', stage: 'READY', message: '面单已生成，可预览或下载 PDF', reasonCode: 'LABEL_READY', lastActivityAt: job?.updatedAt ?? null };
+    if (terminalOrderStatus === ShipmentStatus.CANCELLED) return { ...base, status: 'CANCELLED', stage: 'CANCELLED', message: '订单已取消', reasonCode: 'ORDER_CANCELLED', lastActivityAt: job?.updatedAt ?? null };
+    if (!job) return { ...base, status: 'BLOCKED', stage: 'UNSUPPORTED', message: '该历史订单未纳入自动面单任务，请联系管理员核查', reasonCode: 'DISPATCH_JOB_MISSING', lastActivityAt: null };
+    const referenceAt = job.status === ShipmentDispatchJobStatus.PROCESSING ? job.startedAt ?? job.claimedAt ?? job.updatedAt : job.queuedAt ?? job.updatedAt;
+    if ([ShipmentDispatchJobStatus.PENDING, ShipmentDispatchJobStatus.PROCESSING].includes(job.status) && referenceAt && now - new Date(referenceAt).getTime() >= 10 * 60_000) {
+      const waitingWorker = job.status === ShipmentDispatchJobStatus.PENDING;
+      return { ...base, status: 'STALLED', stage: job.stage ?? (waitingWorker ? 'QUEUED' : 'PROCESSING'), message: waitingWorker ? '面单任务超过 10 分钟未被 Worker 领取，请检查 Redis 或 Worker 状态' : '面单生成处理超过 10 分钟，请核查供应商响应', reasonCode: waitingWorker ? 'WORKER_NOT_CLAIMED' : 'PROCESSING_TIMEOUT', lastActivityAt: job.updatedAt, ...(admin && job.errorMessage ? { technicalDetail: job.errorMessage } : {}) };
+    }
+    const status = job.status === ShipmentDispatchJobStatus.PENDING ? 'PENDING' : job.status === ShipmentDispatchJobStatus.PROCESSING ? (job.stage === 'CREATING' ? 'CREATING' : 'VALIDATING') : job.status === ShipmentDispatchJobStatus.COMPLETED ? 'READY' : job.status;
+    const fallback = status === 'FAILED' ? '面单生成失败，请查看失败原因' : status === 'UNKNOWN' ? '面单生成结果未知，请勿重复下单并联系管理员核查' : status === 'BLOCKED' ? '当前供应商连接暂不支持自动生成面单' : status === 'CREATING' ? '正在向供应商生成面单' : status === 'VALIDATING' ? '正在校验订单信息' : '订单已受理，正在等待面单生成';
+    return { ...base, status, stage: job.stage ?? null, message: job.publicMessage ?? fallback, reasonCode: job.reasonCode ?? null, lastActivityAt: job.updatedAt, ...(admin && job.errorMessage ? { technicalDetail: job.errorMessage } : {}) };
   }
   private async assertShipmentInput(input: CreateOrderInput, driverCode?: string) {
     const required = await this.settings.requiredDeclarationFields(driverCode); const needs = (field: DeclarationFieldCode) => required.has(field);
     const boxNos = new Set<string>();
     const declarationCurrencies = new Set<string>();
     for (const box of input.boxes) {
-      if (!box.boxNo.trim()) throw new BadRequestException('箱号不能为空');
-      if (boxNos.has(box.boxNo)) throw new BadRequestException(`箱号重复：${box.boxNo}`);
-      boxNos.add(box.boxNo);
-      if ([box.weightKg, box.lengthCm, box.widthCm, box.heightCm].some((value) => !Number.isFinite(Number(value)) || Number(value) <= 0)) throw new BadRequestException(`箱号 ${box.boxNo} 的重量和尺寸必须大于 0`);
-      if (!box.items.length) throw new BadRequestException(`箱号 ${box.boxNo} 至少需要一条申报明细`);
+      const boxNo = box.boxNo?.trim();
+      if (!boxNo) throw new BadRequestException('系统未能生成箱号');
+      if (boxNos.has(boxNo)) throw new BadRequestException(`箱号重复：${boxNo}`);
+      boxNos.add(boxNo);
+      if ([box.weightKg, box.lengthCm, box.widthCm, box.heightCm].some((value) => !Number.isFinite(Number(value)) || Number(value) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的重量和尺寸必须大于 0`);
+      if (!box.items.length) throw new BadRequestException(`箱号 ${boxNo} 至少需要一条申报明细`);
       for (const item of box.items) {
-        const missing = (field: DeclarationFieldCode, label: string, value: unknown) => { if (needs(field) && (value === undefined || value === null || String(value).trim() === '')) throw new BadRequestException(`箱号 ${box.boxNo} 的申报明细缺少${label}`); };
+        const missing = (field: DeclarationFieldCode, label: string, value: unknown) => { if (needs(field) && (value === undefined || value === null || String(value).trim() === '')) throw new BadRequestException(`箱号 ${boxNo} 的申报明细缺少${label}`); };
         missing('chineseName', '中文品名', item.chineseName); missing('englishName', '英文品名', item.englishName); missing('material', '材质', item.material); missing('originCountryCode', '原产国', item.originCountryCode); missing('harmonizedCode', 'HS 编码', item.harmonizedCode); missing('declaredValueCurrency', '申报币种', item.declaredValueCurrency);
-        if (needs('quantity') && (!Number.isInteger(item.quantity) || item.quantity! < 1)) throw new BadRequestException(`箱号 ${box.boxNo} 的申报数量必须为正整数`);
-        if (item.quantity !== undefined && (!Number.isInteger(item.quantity) || item.quantity < 1)) throw new BadRequestException(`箱号 ${box.boxNo} 的申报数量必须为正整数`);
-        if (needs('unitDeclaredValue') && (!Number.isFinite(Number(item.unitDeclaredValue)) || Number(item.unitDeclaredValue) <= 0)) throw new BadRequestException(`箱号 ${box.boxNo} 的申报单价必须大于 0`);
-        if (item.unitDeclaredValue !== undefined && item.unitDeclaredValue !== '' && (!Number.isFinite(Number(item.unitDeclaredValue)) || Number(item.unitDeclaredValue) <= 0)) throw new BadRequestException(`箱号 ${box.boxNo} 的申报单价必须大于 0`);
+        if (needs('quantity') && (!Number.isInteger(item.quantity) || item.quantity! < 1)) throw new BadRequestException(`箱号 ${boxNo} 的申报数量必须为正整数`);
+        if (item.quantity !== undefined && (!Number.isInteger(item.quantity) || item.quantity < 1)) throw new BadRequestException(`箱号 ${boxNo} 的申报数量必须为正整数`);
+        if (needs('unitDeclaredValue') && (!Number.isFinite(Number(item.unitDeclaredValue)) || Number(item.unitDeclaredValue) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的申报单价必须大于 0`);
+        if (item.unitDeclaredValue !== undefined && item.unitDeclaredValue !== '' && (!Number.isFinite(Number(item.unitDeclaredValue)) || Number(item.unitDeclaredValue) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的申报单价必须大于 0`);
         if (item.declaredValueCurrency) declarationCurrencies.add(item.declaredValueCurrency);
       }
     }
     if (declarationCurrencies.size > 1) throw new BadRequestException('同一票订单的申报明细必须使用同一币种');
+  }
+  private normalizeBoxNumbers(boxes: BoxInput[], orderNo: string): Array<BoxInput & { boxNo: string }> {
+    const used = new Set(boxes.map((box) => box.boxNo?.trim()).filter((boxNo): boxNo is string => Boolean(boxNo)));
+    let sequence = 1;
+    return boxes.map((box) => {
+      const supplied = box.boxNo?.trim();
+      if (supplied) return { ...box, boxNo: supplied };
+      let generated = `${orderNo}-${String(sequence).padStart(3, '0')}`;
+      while (used.has(generated)) generated = `${orderNo}-${String(++sequence).padStart(3, '0')}`;
+      used.add(generated); sequence += 1;
+      return { ...box, boxNo: generated };
+    });
   }
   private normalizeItem(item: ItemInput) { return { chineseName: item.chineseName?.trim() || null, englishName: item.englishName?.trim() || null, material: item.material?.trim() || null, originCountryCode: item.originCountryCode?.trim().toUpperCase() || null, harmonizedCode: item.harmonizedCode?.trim() || null, quantity: item.quantity ?? null, unitDeclaredValue: item.unitDeclaredValue?.trim() || null, declaredValueCurrency: item.declaredValueCurrency ?? null, sku: item.sku?.trim() || null, itemWeightKg: item.itemWeightKg?.trim() || null, itemLengthCm: item.itemLengthCm?.trim() || null, itemWidthCm: item.itemWidthCm?.trim() || null, itemHeightCm: item.itemHeightCm?.trim() || null }; }
   private number(prefix: string) { return `${prefix}-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`; }

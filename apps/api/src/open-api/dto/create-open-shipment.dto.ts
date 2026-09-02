@@ -36,7 +36,7 @@ export class OpenDeclarationDto {
 }
 
 export class OpenParcelDto {
-  @IsString() number!: string;
+  @IsOptional() @IsString() number?: string;
   @IsOptional() @IsString() reference?: string;
   @Type(() => Number) @IsNumber() @Min(Number.EPSILON) client_weight!: number;
   @Type(() => Number) @IsNumber() @Min(Number.EPSILON) client_length!: number;

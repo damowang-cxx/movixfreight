@@ -234,6 +234,15 @@ docker compose -f docker-compose.production.yml exec -T api \
 curl -fsS https://movixfreight.com/api/health/ready
 ```
 
+若本次版本包含 `migrate-shipment-dispatch-monitoring.sql`，必须在启动新 Worker 前额外执行该 SQL。它会把历史 `SUBMITTED` 且尚未生成面单的 FedEx 订单补进自动打单队列，可能产生真实 FedEx 调用；先确认这些订单确实需要继续出单：
+
+```bash
+docker compose -f docker-compose.production.yml run --rm api \
+  ./apps/api/node_modules/.bin/prisma db execute \
+  --schema apps/api/prisma/schema.prisma \
+  --file apps/api/prisma/migrate-shipment-dispatch-monitoring.sql
+```
+
 ## 8. 本机数据库备份与恢复演练
 
 每天导出一个 PostgreSQL 压缩备份，并定期把恢复流程在非生产库演练一次：

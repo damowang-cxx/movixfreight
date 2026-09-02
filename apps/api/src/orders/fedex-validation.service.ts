@@ -24,16 +24,19 @@ export class FedexValidationService {
     }
   }
 
-  async create(orderId: string) {
+  async create(orderId: string, onStage?: (stage: 'VALIDATING' | 'CREATING') => Promise<void>) {
     const order = await this.load(orderId);
     this.assertFedexChannel(order);
     if (order.shipmentStatus !== ShipmentStatus.SUBMITTED) throw new ConflictException('只有“已下单”的订单可以创建 FedEx 面单');
     const payload = await this.mapper.buildShipment(order);
     try {
+      await onStage?.('VALIDATING');
       const token = await this.connector.getAccessToken(order.service.supplier.code);
       const validation = await this.connector.validate(token.accessToken, payload, order.service.supplier.code);
       await this.log(orderId, ConnectorOperation.VALIDATE_SHIPMENT, ConnectorCallStatus.SUCCESS, payload, validation);
     } catch (error) {
+      const status = this.isUnknown(error) ? ShipmentStatus.UNKNOWN : ShipmentStatus.FAILED;
+      await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: ShipmentStatus.SUBMITTED }, data: { shipmentStatus: status } });
       await this.log(orderId, ConnectorOperation.VALIDATE_SHIPMENT, ConnectorCallStatus.FAILED, payload, undefined, this.message(error));
       throw error;
     }
@@ -41,6 +44,7 @@ export class FedexValidationService {
     const claim = await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: ShipmentStatus.SUBMITTED }, data: { shipmentStatus: ShipmentStatus.GENERATING } });
     if (claim.count !== 1) throw new ConflictException('订单正在生成或已处理，不能重复创建面单');
     try {
+      await onStage?.('CREATING');
       const token = await this.connector.getAccessToken(order.service.supplier.code);
       const result = await this.connector.createShipment(token.accessToken, payload, order.service.supplier.code);
       const parsed = this.connector.extractLabels(result);

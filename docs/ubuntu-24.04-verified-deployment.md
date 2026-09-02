@@ -107,6 +107,28 @@ docker compose --env-file .env.production -f docker-compose.server.yml run --rm 
 
 真实生产库有业务数据后，禁止把 `db push` 当作日常更新手段；更新前必须备份、审查 Schema 差异与 SQL，再执行经过审阅的迁移。
 
+当前订单收件省/州字段迁移文件为 `apps/api/prisma/migrate-recipient-state-and-auto-box.sql`。部署包含该文件的版本前，先完成数据库备份，再在服务器项目根目录执行：
+
+```bash
+docker compose --env-file .env.production -f docker-compose.server.yml run --rm api \
+  ./apps/api/node_modules/.bin/prisma db execute \
+  --schema apps/api/prisma/schema.prisma \
+  --file apps/api/prisma/migrate-recipient-state-and-auto-box.sql
+```
+
+该 SQL 仅新增可空列，不会修改历史订单。完成后再构建并启动新版本容器。
+
+自动面单任务状态与历史 FedEx 待处理订单回填使用 `apps/api/prisma/migrate-shipment-dispatch-monitoring.sql`。此迁移会将历史 `SUBMITTED`、尚未生成面单的 FedEx 订单放入自动生成队列；执行后新 Worker 启动即可能真实调用 FedEx。因此必须先核对这些订单均应继续出单：
+
+```bash
+docker compose --env-file .env.production -f docker-compose.server.yml run --rm api \
+  ./apps/api/node_modules/.bin/prisma db execute \
+  --schema apps/api/prisma/schema.prisma \
+  --file apps/api/prisma/migrate-shipment-dispatch-monitoring.sql
+```
+
+完成后再构建并启动新版本容器；不要在 Worker 已启动时重复执行或手动修改任务状态。
+
 ## 5. 初始化管理员
 
 管理员与客户登录入口不同。创建超级管理员时，密码不写入 shell 历史：
