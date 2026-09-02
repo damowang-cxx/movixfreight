@@ -92,7 +92,7 @@ if [[ "$assume_yes" != true ]]; then
 fi
 
 echo "执行数据库备份..."
-"$PROJECT_DIR/infra/scripts/backup-production.sh"
+bash "$PROJECT_DIR/infra/scripts/backup-production.sh"
 
 echo "拉取代码..."
 git pull --ff-only "$REMOTE_NAME" "$UPDATE_BRANCH"

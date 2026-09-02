@@ -246,20 +246,21 @@ curl -I https://movixfreight.com/admin/
 仓库提供两个服务器运维脚本：
 
 ```bash
-chmod 700 infra/scripts/backup-production.sh infra/scripts/update-production.sh
+bash infra/scripts/backup-production.sh
+bash infra/scripts/update-production.sh --help
 ```
 
 日常更新顺序为：本地完成验证并推送 GitHub 后，服务器只需执行：
 
 ```bash
 cd ~/movixfreight
-./infra/scripts/update-production.sh
+bash infra/scripts/update-production.sh
 ```
 
 脚本会校验 Compose、拉取远程提交、发现数据库目录变更时安全停止、检查是否存在 `PROCESSING` 自动打单任务、备份 PostgreSQL、重建容器并轮询本机 API 就绪状态。确认提示可用 `--yes` 跳过：
 
 ```bash
-./infra/scripts/update-production.sh --yes
+bash infra/scripts/update-production.sh --yes
 ```
 
 如果更新涉及 `apps/api/prisma/`，脚本会在拉取前停止；必须按数据库变更流程手工审查/执行 SQL，不能让脚本自动执行 `db push`。
@@ -267,7 +268,7 @@ cd ~/movixfreight
 单独备份数据库：
 
 ```bash
-./infra/scripts/backup-production.sh
+bash infra/scripts/backup-production.sh
 ```
 
 每日备份数据库到 `/var/backups/movixfreight`，并保留 14 天：
