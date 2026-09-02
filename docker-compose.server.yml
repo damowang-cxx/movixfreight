@@ -1,0 +1,109 @@
+# 已在 Ubuntu 24.04、多站点宿主机 Nginx 环境验证。
+# 仅监听 127.0.0.1:3340-3342，不占用宿主机 80/443。
+name: movixfreight-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: ["${MOVIX_ENV_FILE:-.env.production}"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes: [postgres_production:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [movix_internal]
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    env_file: ["${MOVIX_ENV_FILE:-.env.production}"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes: [redis_production:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks: [movix_internal]
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  api:
+    build: { context: ., dockerfile: infra/docker/Dockerfile.api }
+    restart: unless-stopped
+    init: true
+    env_file: ["${MOVIX_ENV_FILE:-.env.production}"]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DISPATCH_WORKER_ENABLED: "false"
+    volumes: [./config/connectors.production.json:/run/secrets/connectors.json:ro]
+    ports: ["127.0.0.1:3340:3000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [movix_internal]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+  worker:
+    build: { context: ., dockerfile: infra/docker/Dockerfile.api }
+    restart: unless-stopped
+    init: true
+    command: ["node", "apps/api/dist/main.js"]
+    env_file: ["${MOVIX_ENV_FILE:-.env.production}"]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      DISPATCH_WORKER_ENABLED: "true"
+    volumes: [./config/connectors.production.json:/run/secrets/connectors.json:ro]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [movix_internal]
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+  admin-web:
+    build: { context: ., dockerfile: infra/docker/Dockerfile.web, args: { APP: admin-web, VITE_BASE: /admin/ } }
+    restart: unless-stopped
+    ports: ["127.0.0.1:3341:80"]
+    networks: [movix_internal]
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  customer-web:
+    build: { context: ., dockerfile: infra/docker/Dockerfile.web, args: { APP: customer-web, VITE_BASE: / } }
+    restart: unless-stopped
+    ports: ["127.0.0.1:3342:80"]
+    networks: [movix_internal]
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+volumes:
+  postgres_production:
+  redis_production:
+
+networks:
+  movix_internal:
+    driver: bridge

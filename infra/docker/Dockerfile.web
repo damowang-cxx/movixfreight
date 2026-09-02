@@ -16,5 +16,6 @@ COPY . .
 RUN pnpm --filter @movix/${APP} build
 
 FROM nginx:1.27-alpine
+ARG APP
 COPY infra/nginx/web.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/${APP}/dist /usr/share/nginx/html

@@ -2,8 +2,10 @@ node_modules/
 dist/
 .turbo/
 .env
+.env.production
 .env.*.local
 config/connectors.local.json
+config/connectors.production.json
 coverage/
 *.log
 apps/api/prisma/dev.db

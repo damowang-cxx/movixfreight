@@ -2,7 +2,7 @@
 
 中国至欧洲尾程物流的打单、预扣费、供应商对接和会计对账系统。
 
-> 当前状态（2026-09-01）：开发中的本地联调原型，已具备“尾程渠道 → 供应商连接 → 服务”、多级客户利润报价、预扣、FedEx Sandbox 打单、账单匹配、会计重算与确认主链路；管理员可维护头像、本人密码、全局申报字段及供应商面单模板。尚未完成生产部署、真实账单文件导入和生产级安全运维，不能作为生产系统使用。
+> 当前状态（2026-09-01）：已具备“尾程渠道 → 供应商连接 → 服务”、多级客户利润报价、预扣、FedEx Sandbox 打单、账单匹配、会计重算与确认主链路；管理员可维护头像、本人密码、全局申报字段及供应商面单模板。Ubuntu 24.04 的 Docker + 宿主机 Nginx 部署基线已经实际验证；真实生产出单前仍须完成 FedEx 生产授权、生产连接、报价与小额真实订单验收。
 
 ## 当前成果
 
@@ -83,5 +83,6 @@ pnpm build
 - [完整设计与里程碑计划](./docs/system-design/11-overall-development-plan.md)
 - [FedEx 中转站接入说明](./docs/system-design/12-fedex-relay-integration.md)
 - [生产部署与 FedEx Production 上线](./docs/production-deployment.md)
+- [Ubuntu 24.04 已验证部署方案](./docs/ubuntu-24.04-verified-deployment.md)
 - [Open API v1 接入说明](./docs/open-api-v1.md)
 - [实施记录](./docs/implementation-log.md)
