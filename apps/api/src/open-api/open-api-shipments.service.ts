@@ -1,9 +1,8 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { OrdersService } from '../orders/orders.service';
 import { PricingService } from '../pricing/pricing.service';
-import { ShipmentDispatchQueueService } from './shipment-dispatch-queue.service';
 import type { OpenApiPrincipal } from './open-api-auth.guard';
 import type { CreateOpenShipmentDto, OpenAddressDto, OpenShipmentDto } from './dto/create-open-shipment.dto';
 import { normalizeRecipientAddress } from '../orders/recipient-address';
@@ -14,7 +13,7 @@ const ENGLISH_COUNTRIES: Record<string, string> = {
 
 @Injectable()
 export class OpenApiShipmentsService {
-  constructor(private readonly prisma: PrismaService, private readonly orders: OrdersService, private readonly pricing: PricingService, private readonly dispatchQueue: ShipmentDispatchQueueService) {}
+  constructor(private readonly prisma: PrismaService, private readonly orders: OrdersService, private readonly pricing: PricingService) {}
 
   async create(customer: OpenApiPrincipal, idempotencyKey: string | undefined, input: CreateOpenShipmentDto) {
     if (!idempotencyKey?.trim()) throw new BadRequestException('缺少 Idempotency-Key 请求头');
@@ -28,14 +27,12 @@ export class OpenApiShipmentsService {
     }
 
     const normalized = await this.normalizeShipment(input.shipment);
-    const service = await this.prisma.service.findUnique({ where: { code: normalized.serviceCode }, include: { supplier: true } });
-    if (!service?.enabled || !service.supplier.enabled) throw new NotFoundException('服务不存在、已停用或供应商连接不可用');
-    if (service.supplier.driverCode !== 'FEDEX_RELAY') throw new UnprocessableEntityException('当前服务暂不支持 Open API 自动生成面单');
-    this.assertFedexSupportedOptions(normalized);
+    const supplier = await this.prisma.supplier.findUnique({ where: { code: normalized.supplierCode }, select: { id: true } });
+    if (!supplier) throw new NotFoundException('供应商不存在或编号无效');
 
     const order = await this.orders.createForCustomer(customer.customerId, {
       idempotencyKey: `open-${customer.customerId}-${keyHash}`,
-      serviceId: service.id,
+      supplierId: supplier.id,
       recipientName: normalized.toAddress.name!,
       recipientCompany: normalized.toAddress.company,
       recipientPhone: normalized.toAddress.mobile ?? normalized.toAddress.tel,
@@ -60,7 +57,6 @@ export class OpenApiShipmentsService {
     try {
       await this.prisma.$transaction([
         this.prisma.openApiIdempotencyRecord.create({ data: { customerId: customer.customerId, idempotencyKeyHash: keyHash, requestHash, orderId: order.id } }),
-        this.prisma.shipmentDispatchJob.upsert({ where: { orderId: order.id }, update: {}, create: { orderId: order.id } }),
       ]);
     } catch (error) {
       const recovered = await this.prisma.openApiIdempotencyRecord.findUnique({ where: { customerId_idempotencyKeyHash: { customerId: customer.customerId, idempotencyKeyHash: keyHash } }, include: { order: { include: { dispatchJob: true } } } });
@@ -70,7 +66,6 @@ export class OpenApiShipmentsService {
       }
       throw error;
     }
-    await this.dispatchQueue.enqueue(order.id).catch(() => undefined);
     const accepted = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { dispatchJob: true } });
     return this.accepted(accepted);
   }
@@ -127,11 +122,7 @@ export class OpenApiShipmentsService {
     const suppliedNumbers = boxes.map((box) => box.boxNo).filter((boxNo): boxNo is string => Boolean(boxNo)); if (new Set(suppliedNumbers).size !== suppliedNumbers.length) throw new BadRequestException('已填写的箱号不可重复');
     const taxWith = shipment.taxwith ?? 0; const taxNumber = shipment.tax_number?.trim() || undefined;
     if ((taxWith === 3 || taxWith === 4) && !taxNumber) throw new BadRequestException('taxwith 为 3 或 4 时必须填写 tax_number');
-    return { serviceCode: shipment.service.trim(), clientReference: shipment.client_reference?.trim() || undefined, taxWith, taxNumber, deliveryWith: shipment.deliverywith ?? '', exportWith: shipment.exportwith ?? 0, importWith: shipment.importwith ?? 0, attrs: [...new Set(shipment.attrs ?? [])], toAddress, fromAddress, recipientAddress, recipientState: toAddress.state_code || toAddress.state || undefined, destinationCountryCode, boxes, estimatedChargeableKg: boxes.reduce((sum, box) => sum + Number(box.weightKg), 0).toFixed(3) };
-  }
-
-  private assertFedexSupportedOptions(value: Awaited<ReturnType<OpenApiShipmentsService['normalizeShipment']>>) {
-    if (value.taxWith !== 0 || value.deliveryWith || value.exportWith !== 0 || value.importWith !== 0 || value.attrs.length) throw new UnprocessableEntityException('当前 FedEx Open API 连接尚未确认税务、交货、报关、清关或物品属性的供应商映射；请使用默认值');
+    return { supplierCode: shipment.supplier.trim().toUpperCase(), clientReference: shipment.client_reference?.trim() || undefined, taxWith, taxNumber, deliveryWith: shipment.deliverywith ?? '', exportWith: shipment.exportwith ?? 0, importWith: shipment.importwith ?? 0, attrs: [...new Set(shipment.attrs ?? [])], toAddress, fromAddress, recipientAddress, recipientState: toAddress.state_code || toAddress.state || undefined, destinationCountryCode, boxes, estimatedChargeableKg: boxes.reduce((sum, box) => sum + Number(box.weightKg), 0).toFixed(3) };
   }
 
   private cleanAddress(address: OpenAddressDto) { return Object.fromEntries(Object.entries(address).filter(([, value]) => value !== undefined).map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value])) as Record<string, any>; }

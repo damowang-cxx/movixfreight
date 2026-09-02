@@ -18,6 +18,35 @@ export type ConnectorDriverDefinition = {
   serviceModeField?: string;
 };
 
+export const shipmentOptionDefinitions = [
+  { code: 'taxWith', label: '交税方式', type: 'SELECT', options: [{ value: 0, label: '不选择' }, { value: 1, label: '不包税' }, { value: 2, label: '包税' }, { value: 3, label: '自主税号' }, { value: 4, label: '自税递延' }] },
+  { code: 'deliveryWith', label: '交货条款', type: 'SELECT', options: [{ value: '', label: '不选择' }, { value: 'ddu', label: 'DDU' }, { value: 'ddp', label: 'DDP' }] },
+  { code: 'exportWith', label: '报关方式', type: 'SELECT', options: [{ value: 0, label: '不选择' }, { value: 1, label: '买单报关' }, { value: 2, label: '报关退税' }, { value: 3, label: '普通报关' }, { value: 4, label: '合并报关' }, { value: 5, label: '不报关' }, { value: 6, label: '委托报关' }, { value: 7, label: '单独报关' }] },
+  { code: 'importWith', label: '清关方式', type: 'SELECT', options: [{ value: 0, label: '不选择' }, { value: 1, label: '一般贸易清关' }, { value: 2, label: '快件清关' }] },
+  { code: 'shipmentAttrs', label: '物品属性', type: 'MULTI_SELECT', options: [{ value: 'elec', label: '带电' }, { value: 'magnetic', label: '带磁' }, { value: 'danger', label: '危险品' }, { value: 'liquid', label: '液体' }, { value: 'powder', label: '粉末' }, { value: 'paste', label: '膏体' }, { value: 'sensitive_goods', label: '敏感货' }, { value: 'wood', label: '木制品' }, { value: 'textile', label: '纺织品' }] },
+] as const;
+
+const knownShipmentOptionCodes = new Set(shipmentOptionDefinitions.map((item) => item.code));
+
+/** 路由字段只能由驱动的白名单开启，不能把管理端 JSON 原样转发给供应商。 */
+export function normalizeRouteFieldConfig(value: Record<string, unknown> | undefined) {
+  const requested = Array.isArray(value?.shipmentOptions) ? value!.shipmentOptions.filter((item): item is string => typeof item === 'string') : [];
+  const shipmentOptions = [...new Set(requested.filter((item) => knownShipmentOptionCodes.has(item as typeof shipmentOptionDefinitions[number]['code'])))];
+  if (requested.length !== shipmentOptions.length) throw new Error('路由字段包含未支持的选项');
+  return { shipmentOptions };
+}
+
+export function routeFieldSchema(driverCode: string, customsMode: string, fieldConfig: Record<string, unknown> | undefined) {
+  const config = normalizeRouteFieldConfig(fieldConfig);
+  const options = shipmentOptionDefinitions.filter((item) => config.shipmentOptions.includes(item.code));
+  const commodityRequired = driverCode === 'FEDEX_RELAY' && customsMode === 'COMMODITIES';
+  return {
+    shipmentOptions: options,
+    customsMode,
+    declarationRequired: commodityRequired ? ['englishName', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : [],
+  };
+}
+
 export const connectorDrivers: ConnectorDriverDefinition[] = [
   {
     code: 'FEDEX_RELAY',

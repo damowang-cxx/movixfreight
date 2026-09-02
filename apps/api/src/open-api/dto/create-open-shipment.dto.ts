@@ -47,7 +47,7 @@ export class OpenParcelDto {
 
 export class OpenShipmentDto {
   @IsOptional() @IsString() client_reference?: string;
-  @IsString() service!: string;
+  @IsString() supplier!: string;
   @Type(() => Number) @IsInt() @Min(1) parcel_count!: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(4) taxwith?: number;
   @IsOptional() @IsString() tax_number?: string;

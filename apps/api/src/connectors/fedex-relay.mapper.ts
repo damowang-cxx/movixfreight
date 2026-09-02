@@ -11,20 +11,27 @@ export class FedexRelayMapper {
 
   async buildShipment(order: FedexOrder) {
     this.config.assertReady(order.service.supplier.code);
-    if (!order.service.carrierServiceType) throw new BadRequestException('服务尚未配置 FedEx serviceType');
+    const route = order.supplierRouteSnapshot as Record<string, any> | null;
+    const enabledOptions = Array.isArray(route?.fieldSchema?.shipmentOptions) ? route.fieldSchema.shipmentOptions.map((item: any) => item.code) : [];
+    const selectedUnsupportedOption = (order.taxWith !== 0 && !enabledOptions.includes('taxWith')) || (order.deliveryWith !== '' && !enabledOptions.includes('deliveryWith')) || (order.exportWith !== 0 && !enabledOptions.includes('exportWith')) || (order.importWith !== 0 && !enabledOptions.includes('importWith')) || (Array.isArray(order.shipmentAttrs) && order.shipmentAttrs.length > 0 && !enabledOptions.includes('shipmentAttrs'));
+    if (selectedUnsupportedOption) throw new BadRequestException('该 FedEx 国家路由未启用已确认的税务、贸易条款、报关、清关或物品属性字段映射');
+    const carrierServiceType = route?.carrierServiceType ?? order.service.carrierServiceType;
+    if (!carrierServiceType) throw new BadRequestException('订单尚未配置 FedEx serviceType');
     if (!order.recipientCity || !order.recipientAddressLine1 || !order.recipientPhone) throw new BadRequestException('收件人城市、地址和电话为 FedEx 打单必填字段');
     const connection = this.config.connection(order.service.supplier.code);
     const shipper = connection.shipper!;
     const labelSpecification = await this.settings.carrierLabelSpecification(order.service.supplierId, order.service.supplier.driverCode);
     const international = shipper.countryCode !== order.recipientCountryCode;
     const requestedShipment: Record<string, unknown> = {
-      shipDatestamp: new Date().toISOString().slice(0, 10), serviceType: order.service.carrierServiceType, packagingType: 'YOUR_PACKAGING', pickupType: 'DROPOFF_AT_FEDEX_LOCATION',
+      shipDatestamp: new Date().toISOString().slice(0, 10), serviceType: carrierServiceType, packagingType: 'YOUR_PACKAGING', pickupType: 'DROPOFF_AT_FEDEX_LOCATION',
       shipper: { contact: { personName: shipper.name, companyName: shipper.company, phoneNumber: shipper.phone }, address: { streetLines: shipper.streetLines, city: shipper.city, postalCode: shipper.postalCode, countryCode: shipper.countryCode } },
       recipients: [{ contact: { personName: order.recipientName, companyName: order.recipientCompany ?? order.recipientName, phoneNumber: order.recipientPhone }, address: { streetLines: [order.recipientAddressLine1, order.recipientAddressLine2, order.recipientAddressLine3].filter((line): line is string => Boolean(line)), city: order.recipientCity, postalCode: order.recipientPostcode, countryCode: order.recipientCountryCode, residential: order.recipientResidential, ...(order.recipientState ? { stateOrProvinceCode: order.recipientState } : {}) } }],
       shippingChargesPayment: { paymentType: 'SENDER' }, labelSpecification,
       requestedPackageLineItems: order.boxes.map((box, index) => ({ sequenceNumber: String(index + 1), groupPackageCount: 1, weight: { units: 'KG', value: Number(box.weightKg) }, dimensions: { length: Number(box.lengthCm), width: Number(box.widthCm), height: Number(box.heightCm), units: 'CM' }, customerReferences: [{ customerReferenceType: 'CUSTOMER_REFERENCE', value: order.orderNo }] })),
     };
-    if (international) requestedShipment.customsClearanceDetail = this.customs(order);
+    // 历史订单维持旧的跨国处理；新订单必须由国家路由显式决定是否下发清关货品。
+    const customsMode = route?.fieldSchema?.customsMode ?? (international ? 'COMMODITIES' : 'NONE');
+    if (customsMode === 'COMMODITIES') requestedShipment.customsClearanceDetail = this.customs(order);
     return { labelResponseOptions: 'LABEL', accountNumber: { value: connection.fedexAccountNumber }, requestedShipment };
   }
 

@@ -400,10 +400,45 @@ model Supplier {
   costVersions      SupplierCostVersion[]
   billImportBatches SupplierBillImportBatch[]
   labelTemplates    CarrierLabelTemplate[]
+  countryRoutes     SupplierCountryRoute[]
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
   @@map("SupplierChannel")
+}
+
+/// 下单时由“供应商 + 目的国”解析的实际承运商线路。Service 仅承担内部计价。
+model SupplierCountryRoute {
+  id                 String   @id @default(cuid())
+  supplierId         String
+  serviceId          String
+  code               String
+  name               String
+  routeType          String   @default("DEFAULT")
+  carrierServiceType String
+  /// NONE 不下发清关货品；COMMODITIES 下发已确认的 FedEx commodities 基础字段。
+  customsMode        String   @default("NONE")
+  /// 后端驱动定义的字段开关，不接受任意供应商 JSON 透传。
+  fieldConfig        Json     @default("{}")
+  enabled            Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  supplier            Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  service             Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  countries           SupplierCountryRouteCountry[]
+  orders              Order[]
+
+  @@unique([supplierId, code])
+  @@index([supplierId, enabled])
+}
+
+model SupplierCountryRouteCountry {
+  routeId     String
+  countryCode String
+  route       SupplierCountryRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  @@id([routeId, countryCode])
+  @@index([countryCode])
 }
 
 model CarrierLabelTemplate {
@@ -448,6 +483,7 @@ model Service {
   supplier                Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   remoteAreaTemplate      RemoteAreaTemplate? @relation(fields: [remoteAreaTemplateId], references: [id], onDelete: Restrict)
   orders                  Order[]
+  countryRoutes           SupplierCountryRoute[]
   profitVersions          ServiceProfitVersion[]
   createdAt               DateTime          @default(now())
   updatedAt               DateTime          @updatedAt
@@ -606,6 +642,9 @@ model Order {
   idempotencyKey          String         @unique
   customerId              String
   serviceId               String
+  supplierRouteId         String?
+  /// 记录路由、实际 serviceType 和字段规则；不会随配置变更而变化。
+  supplierRouteSnapshot   Json?
   isTest                  Boolean        @default(false)
   carrierTrackingNumber   String?        @unique
   clientReference         String?
@@ -643,6 +682,7 @@ model Order {
   updatedAt               DateTime       @updatedAt
   customer                Customer       @relation(fields: [customerId], references: [id], onDelete: Restrict)
   service                 Service        @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  supplierRoute           SupplierCountryRoute? @relation(fields: [supplierRouteId], references: [id], onDelete: Restrict)
   boxes                   OrderBox[]
   feeLines                OrderFeeLine[]
   connectorCalls          ConnectorCallLog[]
@@ -655,6 +695,7 @@ model Order {
   cancellationRefund      CancellationRefundCase?
 
   @@index([isTest, createdAt])
+  @@index([supplierRouteId])
 }
 
 model ShipmentLabel {

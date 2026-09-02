@@ -82,7 +82,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
           <div class="endpoint"><div class="endpoint-title"><span class="method">POST</span><code>/shipments</code></div><div class="endpoint-body"><p>请求根字段固定为 <code>shipment</code>。成功响应 HTTP <code>202</code>，其中 <code>shipment_id</code> 是系统订单号。</p><div class="code-wrap"><button type="button" data-copy="request-code">复制示例</button><pre id="request-code">{
   "shipment": {
     "client_reference": "ERP-20260824-001",
-    "service": "FEDEX_EU_PRIORITY",
+    "supplier": "FEDEX_RELAY_PRODUCTION_01",
     "parcel_count": 1,
     "taxwith": 0,
     "tax_number": null,
@@ -138,12 +138,12 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
         <section id="rules">
           <h2>字段规则</h2>
           <table><thead><tr><th>字段</th><th>规则</th></tr></thead><tbody>
-            <tr><td>service</td><td>系统中启用、且该客户可下单的服务代码。</td></tr>
+            <tr><td>supplier</td><td>必填。供应商连接编号，例如 <code>FEDEX_RELAY_PRODUCTION_01</code>。系统会按目的国家匹配该供应商已启用的国家路由，自动选择内部计价服务和实际承运商 serviceType；不接受 <code>service</code> 作为下单依据。</td></tr>
             <tr><td>to_address</td><td>必填。<code>name</code>、<code>city</code>、<code>country</code>、<code>postcode</code>、至少一个地址字段，以及 <code>tel</code>/<code>mobile</code> 至少一个必填。<code>address_1/2/3</code> 会合并后重新分配为最多三段，每段不超过 20 个字符，且不会拆分完整单词。</td></tr>
             <tr><td>country</td><td>支持启用国家表中的中文名、ISO 两位代码及既有英文名称，系统统一映射 ISO 两位代码。</td></tr>
             <tr><td>state / state_code</td><td>均为可选；同时提供时优先使用 <code>state_code</code>，并在 FedEx 请求中传为省/州代码。</td></tr>
             <tr><td>parcels</td><td><code>parcel_count</code> 必须等于数组长度；<code>number</code> 可留空，系统会生成订单号前缀箱号；已填写的箱号不可重复；重量、长、宽、高均大于 0。</td></tr>
-            <tr><td>declarations</td><td>每项 <code>name_cn</code>、<code>name_en</code> 必填。FedEx 额外强制原产国、HS 编码、数量、单价及申报币种。</td></tr>
+            <tr><td>declarations</td><td>每项 <code>name_cn</code>、<code>name_en</code> 必填。是否还需原产国、HS 编码、数量、单价及申报币种，取决于命中的供应商国家路由；路由要求时系统会明确拒绝缺失字段。</td></tr>
             <tr><td>taxwith</td><td>仅 <code>0–4</code>；值为 <code>3</code> 或 <code>4</code> 时必须提供 <code>tax_number</code>。</td></tr>
             <tr><td>declaration_currency</td><td>仅支持 <code>EUR</code>、<code>GBP</code>。</td></tr>
           </tbody></table>
@@ -161,7 +161,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
         </section>
         <section id="limits">
           <h2>当前边界</h2>
-          <div class="notice">当前仅 <strong>FEDEX_RELAY</strong> 服务支持自动生成面单。FedEx 的税务、交货条款、报关、清关与物品属性尚未完成供应商字段映射：这些字段目前必须使用默认值 <code>taxwith=0</code>、<code>deliverywith=""</code>、<code>exportwith=0</code>、<code>importwith=0</code>、<code>attrs=[]</code>，否则系统会明确拒绝请求。</div>
+          <div class="notice">当前仅已配置国家路由的 <strong>FEDEX_RELAY</strong> 供应商支持自动生成面单。税务、交货条款、报关、清关与物品属性仅在相应路由已启用且具有明确承运商映射时可提交；未启用的字段不得传入，系统会明确拒绝请求。</div>
           <p style="margin-top:14px">当前未开放：路由轨迹、完整运单信息、服务列表、账户余额、独立运费试算、取消运单与 Webhook。<code>from_address</code> 会保存到订单，但 FedEx 仍使用供应商连接的本地发件人配置。</p>
         </section>
         <footer class="footer">Movix Freight Open API v1 · 技术支持请提供 shipment_id、请求时间及 info.code。开发调试可查看 <a href="/api/docs">Swagger API 文档</a>。</footer>

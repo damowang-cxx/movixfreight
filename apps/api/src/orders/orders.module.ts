@@ -7,6 +7,7 @@ import { PricingModule } from '../pricing/pricing.module';
 import { BalanceAlertsModule } from '../balance-alerts/balance-alerts.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ShipmentDispatchQueueService } from '../open-api/shipment-dispatch-queue.service';
+import { ProductsModule } from '../products/products.module';
 
-@Module({ imports: [PricingModule, BalanceAlertsModule, SettingsModule], controllers: [CustomerOrdersController, OrdersAdminController], providers: [OrdersService, FedexValidationService, ShipmentDispatchQueueService], exports: [OrdersService, FedexValidationService, ShipmentDispatchQueueService] })
+@Module({ imports: [PricingModule, BalanceAlertsModule, SettingsModule, ProductsModule], controllers: [CustomerOrdersController, OrdersAdminController], providers: [OrdersService, FedexValidationService, ShipmentDispatchQueueService], exports: [OrdersService, FedexValidationService, ShipmentDispatchQueueService] })
 export class OrdersModule {}

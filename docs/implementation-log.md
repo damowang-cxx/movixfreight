@@ -253,6 +253,14 @@
 - 新增 Linux Docker Compose、前后端镜像、Nginx HTTPS 网关模板、生产环境变量模板、只读连接配置挂载、就绪检查和本机 PostgreSQL 备份脚本；
 - 已执行 `migrate-production-readiness.sql`、Prisma Client 生成、全仓类型检查、计价测试和完整构建。生产凭据未读取，未触发任何真实 FedEx 请求。
 
+## 2026-09-02：供应商驱动的国家路由
+
+- 新增“供应商国家路由”模型：一条路由绑定供应商连接、内部计价服务、实际承运商 `serviceType`、目的国集合、清关货品规则和不可变订单快照。下单人只选择供应商与目的国，不再选择内部服务；
+- `FEDEX_RELAY` 可在供应商详情中分别维护荷兰本土（仅 `NL`）与泛欧（排除 `NL`）路由。相同供应商、同一目的国不允许存在两个路由；未配置、停用或绑定服务停用时，在试算、预扣前明确拒绝；
+- 管理员下单、客户门户、Excel 导入和 Open API 均改为供应商入口；后端按统一路由解析结果调用既有成本表、利润表、燃油费和余额预扣。Excel 模板列已由“服务代码”改为“供应商编号”，Open API 请求字段已由 `service` 改为 `supplier`；
+- FedEx Mapper 读取订单创建时保存的路由快照下发实际 `serviceType`，不会受日后路由编辑影响。路由明确为“需要清关货品”时才构建清关货品结构；未确认的税务、贸易条款、报关、清关和物品属性映射仍被拒绝，绝不静默忽略；
+- 已新增 `migrate-supplier-country-routing.sql`。该迁移仅为历史订单补写兼容快照，不创建或猜测任何启用路由，也不会补发历史订单。已执行 Prisma Client 生成、全仓 `pnpm typecheck` 与 `pnpm build`；均通过。
+
 ## 当前限制
 
 - 当前 Prisma Windows 迁移引擎在此 Node 环境下会返回空错误；初始 schema 已通过 Prisma 生成的 SQL 写入本地开发库，后续会处理标准迁移记录与工具兼容性。

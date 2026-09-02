@@ -23,11 +23,11 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。创
 
 `POST /shipments`
 
-请求体根字段为 `shipment`。必填业务字段：`service`、`parcel_count`、`to_address`、`parcels`、`declaration_currency`。目的国家可使用已启用国家表中的中文名、ISO 两位代码或既有英文名称，系统会转换为 ISO 两位代码。
+请求体根字段为 `shipment`。必填业务字段：`supplier`、`parcel_count`、`to_address`、`parcels`、`declaration_currency`。`supplier` 是供应商连接编号，而非内部服务代码；系统会按目的国家匹配该供应商启用的国家路由，再自动选择内部计价服务和实际承运商 serviceType。目的国家可使用已启用国家表中的中文名、ISO 两位代码或既有英文名称，系统会转换为 ISO 两位代码。旧 `service` 字段不再作为下单依据。
 
 `to_address` 必须提供姓名、城市、国家、邮编、至少一个地址字段（`address_1`、`address_2`、`address_3`），并至少提供电话或手机。三段地址会按单个空格合并后重新分配为 FedEx 的最多三段地址；每段最多 20 个 Unicode 字符，系统绝不拆分完整单词。单个单词超过 20 个字符或总地址无法容纳时会明确拒绝请求。
 
-`parcels` 中的 `number` 为可选；留空后，系统在创建订单时生成 `ORD-…-001` 形式的箱号。`client_weight`、`client_length`、`client_width`、`client_height` 必填，且 `parcel_count` 必须等于数组长度。每条 `declarations` 至少有 `name_cn`、`name_en`；FedEx 服务还要求原产国、HS 编码、数量、单价与申报币种。
+`parcels` 中的 `number` 为可选；留空后，系统在创建订单时生成 `ORD-…-001` 形式的箱号。`client_weight`、`client_length`、`client_width`、`client_height` 必填，且 `parcel_count` 必须等于数组长度。每条 `declarations` 至少有 `name_cn`、`name_en`；是否还要求原产国、HS 编码、数量、单价与申报币种，取决于命中的国家路由。
 
 成功返回 HTTP `202`，`data.shipment.shipment_id` 为系统订单号 `ORD-…`。它表示订单已预扣并进入自动 `Validate → Create` 面单任务，不表示已获取转单号或 PDF。初始响应的 `label_status` 为 `PENDING`，并同时返回 `label_status_message: "下单成功，正在等待面单生成"` 与 `dispatch` 状态对象；调用方应保存订单号并轮询标签状态接口。
 
@@ -49,8 +49,8 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。创
 - `taxwith`、`deliverywith`、`exportwith`、`importwith` 和 `tax_number` 会完整保存；`taxwith=3/4` 时税号必填。
 - `from_address` 与地址 `ext` 完整保存，FedEx 首期仍使用供应商连接中配置的固定发件人。
 - `to_address.state_code` 优先于 `to_address.state` 保存并下发至 FedEx；两者均为可选。
-- 当前 FedEx Open API 连接未确认税务、交货、报关、清关及物品属性的供应商映射。因此这些字段必须使用默认值：`taxwith=0`、`deliverywith=""`、`exportwith=0`、`importwith=0`、`attrs=[]`；非默认值会返回明确错误，不会被静默忽略。
-- 当前仅 `FEDEX_RELAY` 服务可自动生成面单。路由轨迹、运单信息、服务列表、余额、独立运费试算、取消和 Webhook 尚未开放。
+- 税务、交货、报关、清关及物品属性只在命中国家路由明确启用、且驱动已实现对应承运商映射时可提交；未启用的字段会明确拒绝，不会被静默忽略。
+- 当前仅配置了国家路由的 `FEDEX_RELAY` 供应商可自动生成面单。路由轨迹、运单信息、供应商列表、余额、独立运费试算、取消和 Webhook 尚未开放。
 
 ## 异步执行
 
