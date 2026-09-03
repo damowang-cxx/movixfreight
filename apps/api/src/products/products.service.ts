@@ -87,7 +87,9 @@ export class ProductsService {
   }
   async orderableSuppliers(allowSandbox: boolean) {
     const suppliers = await this.prisma.supplier.findMany({ where: { enabled: true, carrier: { enabled: true }, ...(allowSandbox ? {} : { environment: ChannelEnvironment.PRODUCTION }) }, include: { carrier: { select: { code: true, name: true } }, countryRoutes: { where: { enabled: true }, include: { countries: true }, orderBy: { createdAt: 'asc' } } }, orderBy: { createdAt: 'desc' } });
-    return suppliers.filter((supplier) => supplier.countryRoutes.length).map((supplier) => ({ id: supplier.id, code: supplier.code, name: supplier.name, environment: supplier.environment, driverCode: supplier.driverCode, carrier: supplier.carrier, countries: [...new Set(supplier.countryRoutes.flatMap((route) => route.countries.map((country) => country.countryCode)))].sort() }));
+    // 供应商是用户的第一层选择；国家路由仅在目的国填写后自动解析。
+    // 不能因为尚未配置路由就隐藏供应商，否则管理员无法看出需要补充哪条线路。
+    return suppliers.map((supplier) => ({ id: supplier.id, code: supplier.code, name: supplier.name, environment: supplier.environment, driverCode: supplier.driverCode, carrier: supplier.carrier, countries: [...new Set(supplier.countryRoutes.flatMap((route) => route.countries.map((country) => country.countryCode)))].sort(), hasCountryRoutes: supplier.countryRoutes.length > 0 }));
   }
   async resolveOrderRoute(supplierId: string, countryInput: string, allowSandbox: boolean) {
     const countryCode = await this.resolveCountryCode(countryInput);
