@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { PricingService } from '../pricing/pricing.service';
 import { BalanceAlertsService } from '../balance-alerts/balance-alerts.service';
-import { SettingsService, type DeclarationFieldCode } from '../settings/settings.service';
+import { SettingsService } from '../settings/settings.service';
 import { normalizeRecipientAddress } from './recipient-address';
 import { ShipmentDispatchQueueService } from '../open-api/shipment-dispatch-queue.service';
 import { ProductsService } from '../products/products.service';
@@ -30,7 +30,7 @@ export class OrdersService {
     const resolved = await this.products.resolveOrderRoute(input.supplierId, normalizedInput.recipientCountryCode, Boolean(options.allowSandbox));
     const service = resolved.service;
     this.assertRouteOptions(normalizedInput, resolved.route.fieldSchema);
-    await this.assertShipmentInput(normalizedInput, undefined, resolved.route.fieldSchema.declarationRequired);
+    await this.assertShipmentInput(normalizedInput, undefined, resolved.route.fieldSchema);
     if (!service.allowsMultiPiece && normalizedInput.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
     if (normalizedInput.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
     const quoteWeights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [normalizedInput.estimatedChargeableKg] : normalizedInput.boxes.map((box) => box.weightKg);
@@ -82,7 +82,7 @@ export class OrdersService {
         const resolved = await this.products.resolveOrderRoute(previewOrder.supplierId, previewOrder.recipientCountryCode, true);
         const service = resolved.service;
         this.assertRouteOptions(previewOrder, resolved.route.fieldSchema);
-        await this.assertShipmentInput(previewOrder, undefined, resolved.route.fieldSchema.declarationRequired);
+        await this.assertShipmentInput(previewOrder, undefined, resolved.route.fieldSchema);
         if (!service.allowsMultiPiece && previewOrder.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
         if (previewOrder.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
         const weights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [previewOrder.estimatedChargeableKg] : previewOrder.boxes.map((box) => box.weightKg);
@@ -173,8 +173,10 @@ export class OrdersService {
     const fallback = status === 'FAILED' ? '面单生成失败，请查看失败原因' : status === 'UNKNOWN' ? '面单生成结果未知，请勿重复下单并联系管理员核查' : status === 'BLOCKED' ? '当前供应商连接暂不支持自动生成面单' : status === 'CREATING' ? '正在向供应商生成面单' : status === 'VALIDATING' ? '正在校验订单信息' : '订单已受理，正在等待面单生成';
     return { ...base, status, stage: job.stage ?? null, message: job.publicMessage ?? fallback, reasonCode: job.reasonCode ?? null, lastActivityAt: job.updatedAt, ...(admin && job.errorMessage ? { technicalDetail: job.errorMessage } : {}) };
   }
-  private async assertShipmentInput(input: CreateOrderInput, driverCode?: string, routeRequired: string[] = []) {
-    const required = await this.settings.requiredDeclarationFields(driverCode); for (const field of routeRequired) required.add(field as DeclarationFieldCode); const needs = (field: DeclarationFieldCode) => required.has(field);
+  private async assertShipmentInput(input: CreateOrderInput, driverCode?: string, routeSchema: { declarationRequired?: string[]; carrierRules?: { packageMaxWeightKg?: number | null } } = {}) {
+    const required = new Set<string>(await this.settings.requiredDeclarationFields(driverCode));
+    for (const field of routeSchema.declarationRequired ?? []) required.add(field);
+    const needs = (field: string) => required.has(field);
     const boxNos = new Set<string>();
     const declarationCurrencies = new Set<string>();
     for (const box of input.boxes) {
@@ -183,16 +185,23 @@ export class OrdersService {
       if (boxNos.has(boxNo)) throw new BadRequestException(`箱号重复：${boxNo}`);
       boxNos.add(boxNo);
       if ([box.weightKg, box.lengthCm, box.widthCm, box.heightCm].some((value) => !Number.isFinite(Number(value)) || Number(value) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的重量和尺寸必须大于 0`);
+      const packageMaxWeightKg = routeSchema.carrierRules?.packageMaxWeightKg;
+      if (packageMaxWeightKg && Number(box.weightKg) > packageMaxWeightKg) throw new BadRequestException(`箱号 ${boxNo} 超出该 FedEx 线路单箱 ${packageMaxWeightKg} kg 限制`);
       if (!box.items.length) throw new BadRequestException(`箱号 ${boxNo} 至少需要一条申报明细`);
+      let declaredNetWeight = 0;
       for (const item of box.items) {
-        const missing = (field: DeclarationFieldCode, label: string, value: unknown) => { if (needs(field) && (value === undefined || value === null || String(value).trim() === '')) throw new BadRequestException(`箱号 ${boxNo} 的申报明细缺少${label}`); };
+        const missing = (field: string, label: string, value: unknown) => { if (needs(field) && (value === undefined || value === null || String(value).trim() === '')) throw new BadRequestException(`箱号 ${boxNo} 的申报明细缺少${label}`); };
         missing('chineseName', '中文品名', item.chineseName); missing('englishName', '英文品名', item.englishName); missing('material', '材质', item.material); missing('originCountryCode', '原产国', item.originCountryCode); missing('harmonizedCode', 'HS 编码', item.harmonizedCode); missing('declaredValueCurrency', '申报币种', item.declaredValueCurrency);
         if (needs('quantity') && (!Number.isInteger(item.quantity) || item.quantity! < 1)) throw new BadRequestException(`箱号 ${boxNo} 的申报数量必须为正整数`);
         if (item.quantity !== undefined && (!Number.isInteger(item.quantity) || item.quantity < 1)) throw new BadRequestException(`箱号 ${boxNo} 的申报数量必须为正整数`);
+        if (needs('itemWeightKg') && (!Number.isFinite(Number(item.itemWeightKg)) || Number(item.itemWeightKg) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的申报货品净重必须大于 0`);
+        if (item.itemWeightKg !== undefined && item.itemWeightKg !== '' && (!Number.isFinite(Number(item.itemWeightKg)) || Number(item.itemWeightKg) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的申报货品净重必须大于 0`);
+        declaredNetWeight += Number(item.itemWeightKg ?? 0);
         if (needs('unitDeclaredValue') && (!Number.isFinite(Number(item.unitDeclaredValue)) || Number(item.unitDeclaredValue) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的申报单价必须大于 0`);
         if (item.unitDeclaredValue !== undefined && item.unitDeclaredValue !== '' && (!Number.isFinite(Number(item.unitDeclaredValue)) || Number(item.unitDeclaredValue) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的申报单价必须大于 0`);
         if (item.declaredValueCurrency) declarationCurrencies.add(item.declaredValueCurrency);
       }
+      if (needs('itemWeightKg') && declaredNetWeight > Number(box.weightKg) + 0.000001) throw new BadRequestException(`箱号 ${boxNo} 的申报货品净重合计不得超过箱子实重`);
     }
     if (declarationCurrencies.size > 1) throw new BadRequestException('同一票订单的申报明细必须使用同一币种');
   }

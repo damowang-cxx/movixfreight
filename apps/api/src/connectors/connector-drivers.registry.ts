@@ -18,6 +18,31 @@ export type ConnectorDriverDefinition = {
   serviceModeField?: string;
 };
 
+/**
+ * FedEx Direct is a transparent FedEx proxy.  These are deliberately a
+ * closed set instead of editable serviceType strings: a typo otherwise only
+ * surfaces after a customer has already been precharged.
+ */
+export const fedexRoutePresets = {
+  NL_DOMESTIC: {
+    carrierServiceType: 'FEDEX_PRIORITY',
+    customsMode: 'NONE',
+    label: '荷兰本土 FedEx Priority',
+    description: '荷兰境内线路。不下发跨境清关货品。',
+    packageMaxWeightKg: undefined,
+  },
+  PAN_EUROPE: {
+    carrierServiceType: 'FEDEX_REGIONAL_ECONOMY',
+    customsMode: 'COMMODITIES',
+    label: '泛欧 FedEx Regional Economy',
+    description: '欧洲跨境经济型线路。每箱最多 68 kg；必须申报货品净重、原产国、HS 编码、数量、单价和币种；税费由发件人支付。',
+    packageMaxWeightKg: 68,
+  },
+} as const;
+
+export type FedexRouteType = keyof typeof fedexRoutePresets;
+export const fedexRoutePreset = (routeType: string) => fedexRoutePresets[routeType as FedexRouteType];
+
 export const shipmentOptionDefinitions = [
   { code: 'taxWith', label: '交税方式', type: 'SELECT', options: [{ value: 0, label: '不选择' }, { value: 1, label: '不包税' }, { value: 2, label: '包税' }, { value: 3, label: '自主税号' }, { value: 4, label: '自税递延' }] },
   { code: 'deliveryWith', label: '交货条款', type: 'SELECT', options: [{ value: '', label: '不选择' }, { value: 'ddu', label: 'DDU' }, { value: 'ddp', label: 'DDP' }] },
@@ -36,14 +61,31 @@ export function normalizeRouteFieldConfig(value: Record<string, unknown> | undef
   return { shipmentOptions };
 }
 
-export function routeFieldSchema(driverCode: string, customsMode: string, fieldConfig: Record<string, unknown> | undefined) {
+export function routeFieldSchema(driverCode: string, customsMode: string, fieldConfig: Record<string, unknown> | undefined, routeType?: string) {
   const config = normalizeRouteFieldConfig(fieldConfig);
   const options = shipmentOptionDefinitions.filter((item) => config.shipmentOptions.includes(item.code));
   const commodityRequired = driverCode === 'FEDEX_RELAY' && customsMode === 'COMMODITIES';
+  const preset = driverCode === 'FEDEX_RELAY' ? fedexRoutePreset(routeType ?? '') : undefined;
   return {
     shipmentOptions: options,
     customsMode,
-    declarationRequired: commodityRequired ? ['englishName', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : [],
+    declarationRequired: commodityRequired ? ['englishName', 'itemWeightKg', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : [],
+    carrierRules: preset ? {
+      serviceTypeLocked: preset.carrierServiceType,
+      packageMaxWeightKg: preset.packageMaxWeightKg ?? null,
+      dutiesPayment: customsMode === 'COMMODITIES' ? 'SENDER' : null,
+      documentContent: customsMode === 'COMMODITIES' ? 'NON_DOCUMENTS' : null,
+      shipmentPurpose: customsMode === 'COMMODITIES' ? 'SOLD' : null,
+      // 这些值是当前 FedEx Relay 映射中已经确认并实际下发的固定值。
+      // 不是让下单人填写的通用业务枚举，避免把未确认的 DDU/DDP、
+      // 报关/清关方式等字段静默丢弃或错误映射到 FedEx。
+      fixedFields: customsMode === 'COMMODITIES' ? [
+        { code: 'dutiesPayment', label: '税费付款方', value: 'SENDER', displayValue: '发件人支付（固定）' },
+        { code: 'documentContent', label: '货物类型', value: 'NON_DOCUMENTS', displayValue: '非文件商业货物（固定）' },
+        { code: 'shipmentPurpose', label: '商业发票用途', value: 'SOLD', displayValue: '销售（固定）' },
+      ] : [],
+      description: preset.description,
+    } : undefined,
   };
 }
 

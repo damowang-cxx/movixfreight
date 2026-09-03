@@ -138,13 +138,15 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
         <section id="rules">
           <h2>字段规则</h2>
           <table><thead><tr><th>字段</th><th>规则</th></tr></thead><tbody>
-            <tr><td>supplier</td><td>必填。供应商连接编号，例如 <code>FEDEX_RELAY_PRODUCTION_01</code>。系统会按目的国家匹配该供应商已启用的国家路由，自动选择内部计价服务和实际承运商 serviceType；不接受 <code>service</code> 作为下单依据。</td></tr>
+            <tr><td>supplier</td><td>必填。供应商连接编号，例如 <code>FEDEX_RELAY_PRODUCTION_01</code>。系统会按目的国家匹配该供应商已启用的国家路由；FedEx 荷兰与泛欧订单共用该连接唯一的统一计价服务，调用方不需要也不能指定底层 serviceType；不接受 <code>service</code> 作为下单依据。</td></tr>
             <tr><td>to_address</td><td>必填。<code>name</code>、<code>city</code>、<code>country</code>、<code>postcode</code>、至少一个地址字段，以及 <code>tel</code>/<code>mobile</code> 至少一个必填。<code>address_1/2/3</code> 会合并后重新分配为最多三段，每段不超过 20 个字符，且不会拆分完整单词。</td></tr>
             <tr><td>country</td><td>支持启用国家表中的中文名、ISO 两位代码及既有英文名称，系统统一映射 ISO 两位代码。</td></tr>
             <tr><td>state / state_code</td><td>均为可选；同时提供时优先使用 <code>state_code</code>，并在 FedEx 请求中传为省/州代码。</td></tr>
             <tr><td>parcels</td><td><code>parcel_count</code> 必须等于数组长度；<code>number</code> 可留空，系统会生成订单号前缀箱号；已填写的箱号不可重复；重量、长、宽、高均大于 0。</td></tr>
-            <tr><td>declarations</td><td>每项 <code>name_cn</code>、<code>name_en</code> 必填。是否还需原产国、HS 编码、数量、单价及申报币种，取决于命中的供应商国家路由；路由要求时系统会明确拒绝缺失字段。</td></tr>
-            <tr><td>taxwith</td><td>仅 <code>0–4</code>；值为 <code>3</code> 或 <code>4</code> 时必须提供 <code>tax_number</code>。</td></tr>
+            <tr><td>荷兰本土路由</td><td>目的国 <code>NL</code> 自动使用 <code>FEDEX_PRIORITY</code>，不下发跨境清关货品。</td></tr>
+            <tr><td>泛欧经济型路由</td><td>管理员已配置的非 NL 欧洲目的国自动使用 <code>FEDEX_REGIONAL_ECONOMY</code>。每条申报明细必须有 <code>name_en</code>、<code>weight</code>（商品净重 kg）、<code>origin_country</code>、<code>hs_code</code>、<code>quantity</code>、<code>unit_price</code> 与申报币种；商品净重合计不得超过箱重，单箱最多 68 kg。税费固定由发件人支付。</td></tr>
+            <tr><td>declarations</td><td>每项 <code>name_cn</code>、<code>name_en</code> 必填；泛欧经济型还要求上述清关字段。路由要求时系统会明确拒绝缺失或无效字段。</td></tr>
+            <tr><td>税务/贸易字段</td><td>当前 FedEx 两条线路仅接受默认值；<code>taxwith</code>、<code>deliverywith</code>、<code>exportwith</code>、<code>importwith</code> 与 <code>attrs</code> 的非默认值会被拒绝，避免静默丢失。</td></tr>
             <tr><td>declaration_currency</td><td>仅支持 <code>EUR</code>、<code>GBP</code>。</td></tr>
           </tbody></table>
           <h3>物品属性 attrs</h3><div class="chips"><span class="chip">elec</span><span class="chip">magnetic</span><span class="chip">danger</span><span class="chip">liquid</span><span class="chip">powder</span><span class="chip">paste</span><span class="chip">sensitive_goods</span><span class="chip">wood</span><span class="chip">textile</span></div>
