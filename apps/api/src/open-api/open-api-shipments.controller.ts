@@ -7,6 +7,7 @@ import { OpenApiKeyGuard, type OpenApiPrincipal } from './open-api-auth.guard';
 import { OpenApiExceptionFilter } from './open-api-exception.filter';
 import { OpenApiShipmentsService } from './open-api-shipments.service';
 import { CreateOpenShipmentDto } from './dto/create-open-shipment.dto';
+import { LabelPdfService } from '../orders/label-pdf.service';
 
 @ApiTags('Open API v1')
 @ApiHeader({ name: 'X-API-Key', required: true, description: '客户 API Key' })
@@ -15,7 +16,7 @@ import { CreateOpenShipmentDto } from './dto/create-open-shipment.dto';
 @UseFilters(OpenApiExceptionFilter)
 @Controller('open/v1/shipments')
 export class OpenApiShipmentsController {
-  constructor(private readonly shipments: OpenApiShipmentsService) {}
+  constructor(private readonly shipments: OpenApiShipmentsService, private readonly labelPdf: LabelPdfService) {}
 
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
@@ -35,8 +36,9 @@ export class OpenApiShipmentsController {
   async download(@CurrentOpenApiCustomer() customer: OpenApiPrincipal, @Param('shipmentId') shipmentId: string, @Query('label_id') labelId: string | undefined, @Res() response: Response) {
     const label = await this.shipments.labelFile(customer, shipmentId, labelId);
     const type = label.contentType.toUpperCase().includes('PDF') || Buffer.from(label.content).subarray(0, 4).toString('ascii') === '%PDF' ? 'application/pdf' : 'application/octet-stream';
+    const content = type === 'application/pdf' ? await this.labelPdf.forPreviewOrDownload(label.content, label.contentType) : label.content;
     response.setHeader('Content-Type', type);
     response.setHeader('Content-Disposition', `attachment; filename="fedex-${label.trackingNumber ?? label.id}.${type === 'application/pdf' ? 'pdf' : 'bin'}"`);
-    response.send(label.content);
+    response.send(content);
   }
 }

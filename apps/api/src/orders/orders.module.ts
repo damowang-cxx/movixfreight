@@ -8,6 +8,7 @@ import { BalanceAlertsModule } from '../balance-alerts/balance-alerts.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ShipmentDispatchQueueService } from '../open-api/shipment-dispatch-queue.service';
 import { ProductsModule } from '../products/products.module';
+import { LabelPdfService } from './label-pdf.service';
 
-@Module({ imports: [PricingModule, BalanceAlertsModule, SettingsModule, ProductsModule], controllers: [CustomerOrdersController, OrdersAdminController], providers: [OrdersService, FedexValidationService, ShipmentDispatchQueueService], exports: [OrdersService, FedexValidationService, ShipmentDispatchQueueService] })
+@Module({ imports: [PricingModule, BalanceAlertsModule, SettingsModule, ProductsModule], controllers: [CustomerOrdersController, OrdersAdminController], providers: [OrdersService, FedexValidationService, ShipmentDispatchQueueService, LabelPdfService], exports: [OrdersService, FedexValidationService, ShipmentDispatchQueueService, LabelPdfService] })
 export class OrdersModule {}
