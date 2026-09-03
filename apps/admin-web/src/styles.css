@@ -49,12 +49,16 @@ body { margin: 0; min-width: 1180px; }
 .order-list-table { overflow: hidden; border: 1px solid #e3ebf2; border-radius: 10px; background: #fff; }
 .order-list-table .ant-table { font-size: 12px; }
 .order-list-table .ant-table-container { border-inline: 0 !important; border-start-start-radius: 10px !important; border-start-end-radius: 10px !important; }
+.order-list-table .ant-table-container table { table-layout: fixed !important; }
 .order-list-table .ant-table-content { scrollbar-color: #afc3d1 #f3f7fa; scrollbar-width: thin; }
 .order-list-table .ant-table-content::-webkit-scrollbar { height: 10px; }
 .order-list-table .ant-table-content::-webkit-scrollbar-track { background: #f3f7fa; }
 .order-list-table .ant-table-content::-webkit-scrollbar-thumb { border: 2px solid #f3f7fa; border-radius: 8px; background: #afc3d1; }
 .order-list-table .ant-table-thead > tr > th { padding: 8px 9px !important; color: #557087; font-size: 11px; font-weight: 700; letter-spacing: .15px; white-space: nowrap; }
-.order-list-table .ant-table-tbody > tr > td { padding: 7px 9px !important; line-height: 1.35; white-space: nowrap; }
+.order-list-table .ant-table-tbody > tr > td { overflow: hidden; padding: 7px 9px !important; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.order-list-table .ant-table-tbody > tr > td > .ant-typography,
+.order-list-table .ant-table-tbody > tr > td .ant-typography-secondary { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.order-list-table .ant-table-tbody > tr > td .ant-space { max-width: 100%; }
 .order-list-table .ant-tag { margin-inline-end: 0; padding-inline: 5px; font-size: 11px; line-height: 18px; }
 .order-list-table .ant-btn-sm { height: 24px; padding-inline: 6px; font-size: 11px; }
 .order-list-table .ant-pagination { margin: 12px 0 0 !important; font-size: 12px; }
