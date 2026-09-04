@@ -1,4 +1,4 @@
-import { BadGatewayException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConnectorCallStatus, ConnectorOperation, FeeStatus, Prisma, ShipmentStatus } from '@prisma/client';
 import { FedexRelayConfig } from '../connectors/fedex-relay.config';
 import { FedexRelayConnector } from '../connectors/fedex-relay.connector';
@@ -93,8 +93,10 @@ export class FedexValidationService {
     const claim = await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: ShipmentStatus.GENERATED }, data: { shipmentStatus: ShipmentStatus.GENERATING } });
     if (claim.count !== 1) throw new ConflictException('订单状态已变化或正在处理，请刷新后重试');
     const requestPayload = { trackingNumber: order.carrierTrackingNumber, deletionControl: 'DELETE_ALL_PACKAGES' };
+    let cancelRequestSent = false;
     try {
       const token = await this.connector.getAccessToken(order.service.supplier.code);
+      cancelRequestSent = true;
       const response = await this.connector.cancelShipment(token.accessToken, order.carrierTrackingNumber, order.service.supplier.code);
       if (!this.isCancellationConfirmed(response)) throw new BadGatewayException({ message: 'FedEx 未返回明确的取消成功标识，订单已标记为结果未知，请人工核查', status: 502 });
       await this.prisma.$transaction(async (tx) => {
@@ -104,7 +106,9 @@ export class FedexValidationService {
       });
       return { orderId, cancelled: true, supplierCancelled: true, requiresFinanceRefund: true };
     } catch (error) {
-      const status = this.isUnknown(error) ? ShipmentStatus.UNKNOWN : ShipmentStatus.GENERATED;
+      // OAuth 失败时尚未把取消请求发给供应商，订单仍然可以安全地再次取消。
+      // 一旦已发出取消请求却超时或收到未知响应，不能猜测结果，更不能自动重试。
+      const status = cancelRequestSent && this.isUnknown(error) ? ShipmentStatus.UNKNOWN : ShipmentStatus.GENERATED;
       await this.prisma.order.update({ where: { id: orderId }, data: { shipmentStatus: status } });
       await this.log(orderId, ConnectorOperation.CANCEL_SHIPMENT, ConnectorCallStatus.FAILED, requestPayload, undefined, this.message(error));
       throw error;
@@ -142,6 +146,18 @@ export class FedexValidationService {
     });
   }
 
-  private message(error: unknown) { return error instanceof Error ? error.message : '未知供应商错误'; }
+  private message(error: unknown) {
+    if (error instanceof HttpException) {
+      const response = error.getResponse();
+      if (typeof response === 'string') return response;
+      const body = response as { message?: string | string[]; errors?: Array<{ code?: string; message?: string }> };
+      const primary = Array.isArray(body.message) ? body.message.join('；') : body.message ?? error.message;
+      const details = Array.isArray(body.errors)
+        ? body.errors.map((item) => `${item.code ? `[${item.code}] ` : ''}${item.message ?? ''}`.trim()).filter(Boolean).join('；')
+        : '';
+      return details && !String(primary).includes(details) ? `${primary}：${details}` : String(primary);
+    }
+    return error instanceof Error ? error.message : '未知供应商错误';
+  }
   private async log(orderId: string, operation: ConnectorOperation, status: ConnectorCallStatus, payload: unknown, response?: unknown, errorMessage?: string) { await this.prisma.connectorCallLog.create({ data: { orderId, driverCode: 'FEDEX_RELAY', operation, status, httpStatus: status === ConnectorCallStatus.SUCCESS ? 200 : null, requestPayload: payload as Prisma.InputJsonValue, responsePayload: response as Prisma.InputJsonValue, errorMessage } }); }
 }

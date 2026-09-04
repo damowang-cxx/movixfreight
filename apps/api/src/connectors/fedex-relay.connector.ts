@@ -1,4 +1,4 @@
-import { BadGatewayException, Injectable } from '@nestjs/common';
+import { BadGatewayException, GatewayTimeoutException, Injectable } from '@nestjs/common';
 import { FedexRelayConfig } from './fedex-relay.config';
 
 export type FedexRelayPayload = Record<string, unknown>;
@@ -7,11 +7,12 @@ export type FedexLabel = { trackingNumber?: string; contentType: string; encoded
 /** direct.ship-api.com/fedex 的已确认接口：OAuth、Rate、Validate、Create、Cancel。 */
 @Injectable()
 export class FedexRelayConnector {
+  private static readonly REQUEST_TIMEOUT_MS = 30_000;
   constructor(private readonly config: FedexRelayConfig) {}
 
   async getAccessToken(profileKey?: string) {
     this.config.assertReady(profileKey); const connection = this.config.connection(profileKey);
-    const response = await fetch(`${connection.baseUrl!.replace(/\/$/, '')}/oauth/token`, { method: 'POST', headers: { [connection.authHeaderName!]: `Bearer ${connection.shipApiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials' });
+    const response = await this.fetchWithTimeout(`${connection.baseUrl!.replace(/\/$/, '')}/oauth/token`, { method: 'POST', headers: { [connection.authHeaderName!]: `Bearer ${connection.shipApiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials' }, 'FedEx 中转站 OAuth 授权');
     const body = await this.json(response);
     if (!response.ok || typeof body.access_token !== 'string') throw new BadGatewayException('FedEx 中转站 OAuth 授权失败');
     return { accessToken: body.access_token, expiresIn: Number(body.expires_in ?? 0) };
@@ -27,11 +28,12 @@ export class FedexRelayConnector {
   async cancelShipment(token: string, trackingNumber: string, profileKey?: string) {
     this.config.assertReady(profileKey);
     const connection = this.config.connection(profileKey);
+    // Ship-API Direct mirrors FedEx's native Ship API path.  The tracking
+    // number identifies the shipment in the URL; the body only carries the
+    // account and deletion scope.
     return this.del(`/ship/v1/shipments/${encodeURIComponent(trackingNumber)}`, token, {
       accountNumber: { value: connection.fedexAccountNumber },
-      trackingNumber,
       deletionControl: 'DELETE_ALL_PACKAGES',
-      senderCountryCode: connection.shipper!.countryCode,
     }, profileKey);
   }
 
@@ -43,7 +45,7 @@ export class FedexRelayConnector {
 
   private async post(path: string, token: string, payload: FedexRelayPayload, profileKey?: string) {
     this.config.assertReady(profileKey); const connection = this.config.connection(profileKey);
-    const response = await fetch(`${connection.baseUrl!.replace(/\/$/, '')}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, [connection.authHeaderName!]: `Bearer ${connection.shipApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const response = await this.fetchWithTimeout(`${connection.baseUrl!.replace(/\/$/, '')}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, [connection.authHeaderName!]: `Bearer ${connection.shipApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, 'FedEx 中转站请求');
     const body = await this.json(response);
     if (!response.ok) throw new BadGatewayException({ message: 'FedEx 中转站调用失败', status: response.status, errors: body.errors ?? body.output?.alerts ?? body.message ?? null });
     return body;
@@ -51,11 +53,26 @@ export class FedexRelayConnector {
 
   private async del(path: string, token: string, payload: FedexRelayPayload, profileKey?: string) {
     this.config.assertReady(profileKey); const connection = this.config.connection(profileKey);
-    const response = await fetch(`${connection.baseUrl!.replace(/\/$/, '')}${path}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}`, [connection.authHeaderName!]: `Bearer ${connection.shipApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const response = await this.fetchWithTimeout(`${connection.baseUrl!.replace(/\/$/, '')}${path}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}`, [connection.authHeaderName!]: `Bearer ${connection.shipApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, 'FedEx 中转站取消运单请求');
     const body = await this.json(response);
     if (!response.ok) throw new BadGatewayException({ message: 'FedEx 中转站取消运单失败', status: response.status, errors: body.errors ?? body.output?.alerts ?? body.message ?? null });
     return body;
   }
 
   private async json(response: Response): Promise<any> { try { return await response.json(); } catch { return {}; } }
+
+  private async fetchWithTimeout(url: string, init: RequestInit, operation: string) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FedexRelayConnector.REQUEST_TIMEOUT_MS);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new GatewayTimeoutException(`${operation}超过 30 秒未返回。供应商是否已处理无法确认，请勿重复提交，系统已标记为“结果未知”等待人工核查。`);
+      }
+      throw new BadGatewayException(`${operation}网络连接失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 }

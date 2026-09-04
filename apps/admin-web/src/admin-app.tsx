@@ -55,7 +55,14 @@ export function AdminApp() {
   const [loading, setLoading] = useState(false);
   const request = useCallback(async (path: string, options: RequestInit = {}) => {
     const response = await fetch(`${API}${path}`, { ...options, headers: { Authorization: `Bearer ${token}`, ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
-    if (!response.ok) { const body = await response.json().catch(() => ({})); const error = new Error(Array.isArray(body.message) ? body.message.join('；') : body.message || `请求失败（${response.status}）`) as Error & { status?: number }; error.status = response.status; throw error; }
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const messageText = Array.isArray(body.message) ? body.message.join('；') : body.message || `请求失败（${response.status}）`;
+      const detailText = Array.isArray(body.errors) ? body.errors.map((item: any) => `${item.code ? `[${item.code}] ` : ''}${item.message ?? String(item)}`).join('；') : body.errors?.message ?? '';
+      const error = new Error(detailText && !String(messageText).includes(detailText) ? `${messageText}：${detailText}` : messageText) as Error & { status?: number };
+      error.status = response.status;
+      throw error;
+    }
     return response;
   }, [token]);
   const refresh = useCallback(async () => {
@@ -496,17 +503,34 @@ function CreateOrderFlow({ data, request, refresh }: Context) {
 }
 
 function OrderListManagement({ data, request, refresh }: Context) {
-  const [busy, setBusy] = useState(''); const [detail, setDetail] = useState<any>(null); const [filters, setFilters] = useState<any>({}); const [dispatchUpdates, setDispatchUpdates] = useState<Record<string, any>>({}); const [preview, setPreview] = useState<{ filename: string; url?: string; error?: string; loading?: boolean } | null>(null); const previewFrameRef = useRef<HTMLIFrameElement>(null); const orderRowsRef = useRef<any[]>([]);
-  const cancel = (order: any) => Modal.confirm({
-    title: '取消运单', okText: '确认取消', okButtonProps: { danger: true }, cancelText: '暂不取消',
-    content: <Space direction="vertical"><Typography.Text>{order.shipmentStatus === 'GENERATED' ? `将向 FedEx 取消转单号 ${order.carrierTrackingNumber ?? '—'}。FedEx 仅会取消尚未交运/收货的运单。` : '该订单尚未获得有效 FedEx 面单，将仅取消系统订单。'}</Typography.Text><Typography.Text type="secondary">取消成功不会自动退款；预扣金额仍需在订单对账中由会计确认后处理。</Typography.Text></Space>,
-    onOk: async () => { setBusy(`cancel-${order.id}`); try { const result = await (await request(`/admin/v1/orders/${order.id}/fedex/cancel`, { method: 'POST' })).json(); message.success(result.supplierCancelled ? 'FedEx 已确认取消，等待会计处理退款' : '订单已取消，等待会计处理退款'); await refresh(); if (detail?.id === order.id) await openDetail(order.id); } catch (error) { message.error(errorText(error)); throw error; } finally { setBusy(''); } },
-  });
+  const [busy, setBusy] = useState(''); const [detail, setDetail] = useState<any>(null); const [filters, setFilters] = useState<any>({}); const [dispatchUpdates, setDispatchUpdates] = useState<Record<string, any>>({}); const [preview, setPreview] = useState<{ filename: string; url?: string; error?: string; loading?: boolean } | null>(null); const [cancellingOrder, setCancellingOrder] = useState<any>(null); const [cancelError, setCancelError] = useState<string | null>(null); const previewFrameRef = useRef<HTMLIFrameElement>(null); const orderRowsRef = useRef<any[]>([]);
+  const cancel = (order: any) => { setCancelError(null); setCancellingOrder(order); };
   const closePreview = () => setPreview((current) => { if (current?.url) URL.revokeObjectURL(current.url); return null; });
   const print = async (order: any, label: any) => { const filename = labelFilename(label); closePreview(); setPreview({ filename, loading: true }); try { const blob = await asLabelBlob(await request(`/admin/v1/orders/${order.id}/labels/${label.id}/inline`)); const header = new Uint8Array(await blob.slice(0, 4).arrayBuffer()); const isPdf = blob.type.toLowerCase().includes('pdf') || String.fromCharCode(...header) === '%PDF'; if (!isPdf) throw new Error('供应商返回的面单不是 PDF，无法在当前页面预览。请下载文件后核对输出格式。'); setPreview({ filename, url: URL.createObjectURL(new Blob([blob], { type: 'application/pdf' })) }); } catch (error) { setPreview({ filename, error: errorText(error) }); } };
   const printPreview = () => { const frame = previewFrameRef.current; if (!frame?.contentWindow) { message.error('PDF 尚未加载完成'); return; } frame.contentWindow.focus(); frame.contentWindow.print(); };
   const download = async (order: any, label: any) => { try { await downloadLabel(await asLabelBlob(await request(`/admin/v1/orders/${order.id}/labels/${label.id}/inline`)), labelFilename(label)); } catch (error) { message.error(errorText(error)); } };
   const openDetail = async (orderId: string) => { try { setDetail(await (await request(`/admin/v1/orders/${orderId}`)).json()); } catch (error) { message.error(errorText(error)); } };
+  const confirmCancel = async () => {
+    const order = cancellingOrder;
+    if (!order) return;
+    setBusy(`cancel-${order.id}`);
+    setCancelError(null);
+    try {
+      const result = await (await request(`/admin/v1/orders/${order.id}/fedex/cancel`, { method: 'POST' })).json();
+      message.success(result.supplierCancelled ? 'FedEx 已确认取消，等待会计处理退款' : '订单已取消，等待会计处理退款');
+      setCancellingOrder(null);
+      await refresh();
+      if (detail?.id === order.id) await openDetail(order.id);
+    } catch (error) {
+      const reason = errorText(error);
+      setCancelError(reason);
+      message.error(reason);
+      await refresh().catch(() => undefined);
+      if (detail?.id === order.id) await openDetail(order.id);
+    } finally {
+      setBusy('');
+    }
+  };
   const orders = (data.orders ?? []).filter((order: any) => { const keyword = String(filters.keyword ?? '').trim().toLowerCase(); return (!keyword || [order.orderNo, order.carrierTrackingNumber, order.customer?.username, order.supplierRouteSnapshot?.supplierName, order.service?.name, order.recipientCountryCode].some((value) => String(value ?? '').toLowerCase().includes(keyword))) && (!filters.status || order.shipmentStatus === filters.status) && (!filters.serviceId || order.service?.id === filters.serviceId) && (!filters.customerId || order.customer?.id === filters.customerId) && (!filters.environment || order.service?.supplier?.environment === filters.environment); }).map((order: any) => ({ ...order, dispatch: dispatchUpdates[order.id] ?? order.dispatch }));
   const hasPendingDispatch = orders.some(isPendingDispatch);
   useEffect(() => { orderRowsRef.current = orders; }, [orders]);
@@ -533,6 +557,13 @@ function OrderListManagement({ data, request, refresh }: Context) {
       {preview?.loading && <div style={{ height: 640, display: 'grid', placeItems: 'center' }}><Spin tip="正在加载 PDF 面单…" /></div>}
       {preview?.error && <Alert type="error" showIcon message="面单无法预览" description={preview.error} />}
       {preview?.url && <iframe ref={previewFrameRef} title="面单 PDF 预览" src={preview.url} style={{ display: 'block', width: '100%', height: '72vh', minHeight: 560, border: 0, background: '#525659' }} />}
+    </Modal>
+    <Modal open={Boolean(cancellingOrder)} title="取消运单" okText="确认取消" cancelText="暂不取消" okButtonProps={{ danger: true }} confirmLoading={busy === `cancel-${cancellingOrder?.id}`} maskClosable={!busy.startsWith('cancel-')} keyboard={!busy.startsWith('cancel-')} onOk={() => void confirmCancel()} onCancel={() => { if (!busy.startsWith('cancel-')) { setCancelError(null); setCancellingOrder(null); } }}>
+      <Space direction="vertical">
+        <Typography.Text>{cancellingOrder?.shipmentStatus === 'GENERATED' ? `将向 FedEx 取消转单号 ${cancellingOrder.carrierTrackingNumber ?? '—'}。FedEx 仅会取消尚未交运或收货的运单。` : '该订单尚未获得有效 FedEx 面单，将仅取消系统订单。'}</Typography.Text>
+        <Typography.Text type="secondary">取消成功不会自动退款；预扣金额仍需在订单对账中由会计确认后处理。</Typography.Text>
+        {cancelError && <Alert type="error" showIcon message="FedEx 取消未确认" description={cancelError} />}
+      </Space>
     </Modal>
   </section>;
 }
