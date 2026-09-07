@@ -21,9 +21,9 @@
 | 费率查询 | `POST /rate/v1/rates/quotes` | OAuth Bearer Token + `ship-api-authorization` |
 | 运单校验 | `POST /ship/v1/shipments/packages/validate` | 同上 |
 | 创建面单 | `POST /ship/v1/shipments` | 同上 |
-| 取消整票 | `DELETE /ship/v1/shipments/{trackingNumber}` | 同上；请求体提供账号、转单号、发件国与 `DELETE_ALL_PACKAGES` |
+| 取消整票 | `PUT /ship/v1/shipments/cancel` | 同上，并加 `x-locale: en_US`；请求体提供账号、转单号、`DELETE_ALL_PACKAGES` 与 `emailReturnShipment: false` |
 
-Ship-API Direct 按其说明镜像 FedEx Ship API 路径。取消使用 FedEx 的取消运单路径；系统只对已生成、未标记为已收货的订单发起请求，国际多件订单以主转单号和 `DELETE_ALL_PACKAGES` 取消整票。中转商尚未提供的查单／轨迹接口仍不实现，不能猜测路径。
+创建、校验等能力按 Ship-API Direct 的 FedEx 路径调用；取消则使用中转站明确提供的适配端点，不能套用 FedEx 原生 `DELETE` 路径。系统只对已生成、未标记为已收货的订单发起请求，国际多件订单以主转单号和 `DELETE_ALL_PACKAGES` 取消整票。中转商尚未提供的查单／轨迹接口仍不实现，不能猜测路径。
 
 ## 取消运单的系统规则
 

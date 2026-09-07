@@ -256,7 +256,7 @@
 
 ## 2026-09-01：FedEx 单票取消
 
-- 基于 FedEx Ship API 的 `DELETE /ship/v1/shipments/{trackingNumber}` 接入 Ship-API Direct 中转路径；请求使用供应商本地配置中的账号和发件国，并使用 `DELETE_ALL_PACKAGES` 取消国际多件整票；
+- 初版曾按 FedEx 原生 `DELETE /ship/v1/shipments/{trackingNumber}` 接入；后经 Ship-API Direct 确认，取消使用中转站适配端点 `PUT /ship/v1/shipments/cancel`，请求传入供应商本地配置中的账号、转单号、`DELETE_ALL_PACKAGES`、`emailReturnShipment:false`，并固定 `x-locale: en_US`；
 - 管理员订单列表和订单详情均提供“取消运单”。已生成订单必须收到 FedEx 明确的 `cancelledShipment=true` 才会标记为已取消；尚未生成有效面单或明确生成失败的订单只完成内部取消；
 - 已收货、正在处理、退件和结果未知订单被后端拦截。网络超时、服务端错误或响应不明确时订单改为 `UNKNOWN`，不自动重试；
 - 取消全程写入供应商调用审计；本轮不自动退款，继续由会计确认后处理余额，避免供应商结果不确定时错误退款；

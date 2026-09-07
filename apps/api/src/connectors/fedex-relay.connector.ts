@@ -28,11 +28,12 @@ export class FedexRelayConnector {
   async cancelShipment(token: string, trackingNumber: string, profileKey?: string) {
     this.config.assertReady(profileKey);
     const connection = this.config.connection(profileKey);
-    // Ship-API Direct mirrors FedEx's native Ship API path.  The tracking
-    // number identifies the shipment in the URL; the body only carries the
-    // account and deletion scope.
-    return this.del(`/ship/v1/shipments/${encodeURIComponent(trackingNumber)}`, token, {
+    // Ship-API Direct exposes its own FedEx cancellation adapter.  It is not
+    // the native FedEx DELETE endpoint: the tracking number is in the body
+    // and the adapter requires PUT /ship/v1/shipments/cancel.
+    return this.put('/ship/v1/shipments/cancel', token, {
       accountNumber: { value: connection.fedexAccountNumber },
+      trackingNumber,
       deletionControl: 'DELETE_ALL_PACKAGES',
     }, profileKey);
   }
@@ -51,9 +52,9 @@ export class FedexRelayConnector {
     return body;
   }
 
-  private async del(path: string, token: string, payload: FedexRelayPayload, profileKey?: string) {
+  private async put(path: string, token: string, payload: FedexRelayPayload, profileKey?: string) {
     this.config.assertReady(profileKey); const connection = this.config.connection(profileKey);
-    const response = await this.fetchWithTimeout(`${connection.baseUrl!.replace(/\/$/, '')}${path}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}`, [connection.authHeaderName!]: `Bearer ${connection.shipApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, 'FedEx 中转站取消运单请求');
+    const response = await this.fetchWithTimeout(`${connection.baseUrl!.replace(/\/$/, '')}${path}`, { method: 'PUT', headers: { Authorization: `Bearer ${token}`, [connection.authHeaderName!]: `Bearer ${connection.shipApiKey}`, 'Content-Type': 'application/json', 'x-locale': 'en_US' }, body: JSON.stringify({ ...payload, emailReturnShipment: false }) }, 'FedEx 中转站取消运单请求');
     const body = await this.json(response);
     if (!response.ok) throw new BadGatewayException({ message: 'FedEx 中转站取消运单失败', status: response.status, errors: body.errors ?? body.output?.alerts ?? body.message ?? null });
     return body;
