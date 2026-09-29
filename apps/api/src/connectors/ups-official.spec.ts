@@ -24,7 +24,7 @@ test('UPS exact profile lookup, safe status, no root or FedEx fallback', () => {
   assert.throws(() => config.connection('UPS1', 'SANDBOX'), /不匹配/);
   const status = JSON.stringify(config.status('UPS1'));
   for (const secret of [profile.clientId, profile.clientSecret, profile.shipperNumber]) assert.equal(status.includes(secret), false);
-  (config as any).profiles = () => ({ UPS1: { ...profile, shipper: { ...profile.shipper, countryCode: 'BE' } } });
+  (config as any).profiles = () => ({ UPS1: { ...profile, shipper: { ...profile.shipper, countryCode: 'US' } } });
   assert.equal(config.status('UPS1').configured, false);
 });
 test('malformed UPS profile reports missing fields without leaking values or crashing', () => {
@@ -89,4 +89,36 @@ test('structured rejection differs from unknown; no network auto retry; OAuth er
     await assert.rejects(connector.getAccessToken('UPS1', profile), (e: any) => e.phase === 'OAUTH' && e.unknown === false);
     assert.equal(calls, 3);
   } finally { globalThis.fetch = previous; }
+});
+
+test('Belgian origin config accepts optional state and normalizes country, rejects other origins', () => {
+  const config = new UpsOfficialConfig({} as any);
+  for (const stateCode of [undefined, '', '   ']) {
+    (config as any).profiles = () => ({ UPS1: { ...profile, shipper: { ...profile.shipper, city: 'TERNAT', postalCode: '1740', countryCode: ' be ', stateCode } } });
+    assert.equal(config.status('UPS1').configured, true);
+    const connection = config.connection('UPS1', 'PRODUCTION');
+    assert.equal(connection.shipper.countryCode, 'BE');
+    assert.equal(connection.shipper.stateCode, undefined);
+  }
+  for (const countryCode of ['', 'US', 'FR']) {
+    (config as any).profiles = () => ({ UPS1: { ...profile, shipper: { ...profile.shipper, countryCode } } });
+    assert.equal(config.status('UPS1').configured, false);
+  }
+});
+
+test('Belgian Shipper and ShipFrom use BE for domestic and EU orders, NL remains compatible', () => {
+  const belgian: UpsProfile = { ...profile, shipper: { ...profile.shipper, streetLines: ['INDUSTRIELAAN 31'], city: 'TERNAT', postalCode: '1740', countryCode: 'BE', stateCode: '' } };
+  for (const recipientCountryCode of ['BE', 'NL', 'DE']) {
+    const order = { ...upsOrder(), recipientCountryCode, supplierRouteSnapshot: { ...upsOrder().supplierRouteSnapshot, shipperCountryCode: 'BE' } };
+    const shipment = buildUpsShipment(order, belgian).ShipmentRequest.Shipment;
+    assert.equal(shipment.Shipper.Address.CountryCode, 'BE');
+    assert.equal(shipment.ShipFrom.Address.CountryCode, 'BE');
+    assert.equal(shipment.ShipTo.Address.CountryCode, recipientCountryCode);
+    assert.equal(shipment.Service.Code, '11');
+    assert.equal('StateProvinceCode' in shipment.Shipper.Address, false);
+    assert.equal(shipment.ShipFrom.Address.PostalCode, '1740');
+  }
+  assert.equal(buildUpsShipment(upsOrder(), profile).ShipmentRequest.Shipment.ShipFrom.Address.CountryCode, 'NL');
+  assert.throws(() => buildUpsShipment(upsOrder(), belgian), /发件国与订单创建时不一致/);
+  assert.throws(() => buildUpsShipment({ ...upsOrder(), supplierRouteSnapshot: { ...upsOrder().supplierRouteSnapshot, shipperCountryCode: 'BE' } }, profile), /发件国与订单创建时不一致/);
 });

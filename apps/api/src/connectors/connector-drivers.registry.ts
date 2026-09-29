@@ -99,7 +99,7 @@ export const connectorDrivers: ConnectorDriverDefinition[] = [
   {
     allowedCountryCodes: UPS_EU_COUNTRIES,
     code: 'UPS_OFFICIAL', name: 'UPS 官方接口', carrierCodes: ['UPS'],
-    description: '荷兰发货、已配置欧盟目的国 UPS Standard；自动打单、逐箱 4×6 PDF 和整票取消。凭据按供应商编号配置，生产请求会创建真实运单。',
+    description: '荷兰或比利时发货、已配置欧盟目的国 UPS Standard；自动打单、逐箱 4×6 PDF 和整票取消。凭据按供应商编号配置，生产请求会创建真实运单。',
     capabilities: { autoCreate: true, cancel: true, addressLineLimit: 35, perBoxLabels: true },
     serviceModeField: 'allowedServiceModes',
     businessFields: [

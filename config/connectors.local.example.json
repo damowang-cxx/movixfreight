@@ -55,15 +55,15 @@
   "upsOfficial": {
     "profiles": {
       "UPS_OFFICIAL_PRODUCTION_01": {
-        "enabled": false,
+        "enabled": true,
         "environment": "production",
-        "clientId": "",
-        "clientSecret": "",
-        "shipperNumber": "",
+        "clientId": "dHouZJlgNK6ibzl3n9w7YOLaKyRGaE3vlONCVaOfU6i8AarM",
+        "clientSecret": "LNMVMDfJkzpRhGjZBVhJ5xaFV16NEQeXliq3u3vQEeM67sRCfzjUclgjNuAfmVfD",
+        "shipperNumber": "H871D6",
         "shipper": {
-          "name": "", "company": "", "phone": "",
-          "streetLines": [""], "city": "", "stateCode": "",
-          "postalCode": "", "countryCode": "NL"
+          "name": "EP", "company": "", "phone": "31 684747361",
+          "streetLines": ["INDUSTRIELAAN 31"], "city": "TERNAT", "stateCode": "",
+          "postalCode": "1740", "countryCode": "NL"
         }
       }
     }

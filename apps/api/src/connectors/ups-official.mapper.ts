@@ -1,11 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
 import { UPS_EU_COUNTRIES } from './connector-drivers.registry';
-import { UpsProfile } from './ups-official.config';
+import { UpsProfile, UPS_ORIGIN_COUNTRIES, normalizeUpsOrigin } from './ups-official.config';
 import { normalizeRecipientAddress } from '../orders/recipient-address';
 
 export function assertUpsInput(input: any) {
   const fail = (s: string): never => { throw new BadRequestException(s); };
-  if (!UPS_EU_COUNTRIES.includes(input.recipientCountryCode)) fail('UPS 首期仅支持荷兰发往已配置欧盟国家');
+  if (!UPS_EU_COUNTRIES.includes(input.recipientCountryCode)) fail('UPS 仅支持荷兰或比利时发往已配置欧盟国家');
   // EU membership alone does not imply common customs territory. Exclude known special territories.
   const zip = String(input.recipientPostcode ?? '').replace(/\s/g, '').toUpperCase();
   const country = input.recipientCountryCode;
@@ -33,9 +33,13 @@ export function assertUpsInput(input: any) {
 export function buildUpsShipment(order: any, p: UpsProfile) {
   assertUpsInput(order);
   const snapshot = order.supplierRouteSnapshot;
+  const origin = normalizeUpsOrigin(p.shipper.countryCode);
+  if (!UPS_ORIGIN_COUNTRIES.some(code => code === origin)) throw new BadRequestException('UPS 发件国仅支持 NL（荷兰）或 BE（比利时）');
+  // Older UPS orders were created when the origin was hard-coded to NL.
+  if ((snapshot?.shipperCountryCode ?? 'NL') !== origin) throw new BadRequestException('UPS 发件国与订单创建时不一致，请恢复原配置或使用独立供应商连接，禁止更换始发国出单');
   if (snapshot?.carrierServiceType !== '11' || snapshot?.fieldSchema?.customsMode !== 'NONE') throw new BadRequestException('UPS 订单缺少有效的 Standard 无清关路由快照');
   const address = normalizeRecipientAddress([order.recipientAddressRaw ?? order.recipientAddressLine1, ...(order.recipientAddressRaw ? [] : [order.recipientAddressLine2, order.recipientAddressLine3])], 'UPS_OFFICIAL');
-  const shipper = { Name: p.shipper.company, AttentionName: p.shipper.name, Phone: { Number: p.shipper.phone.replace(/\D/g, '') }, Address: { AddressLine: p.shipper.streetLines, City: p.shipper.city, PostalCode: p.shipper.postalCode.replace(/\s/g, ''), CountryCode: 'NL', ...(p.shipper.stateCode ? { StateProvinceCode: p.shipper.stateCode } : {}) } };
+  const shipper = { Name: p.shipper.company, AttentionName: p.shipper.name, Phone: { Number: p.shipper.phone.replace(/\D/g, '') }, Address: { AddressLine: p.shipper.streetLines, City: p.shipper.city, PostalCode: p.shipper.postalCode.replace(/\s/g, ''), CountryCode: origin, ...(p.shipper.stateCode?.trim() ? { StateProvinceCode: p.shipper.stateCode.trim() } : {}) } };
   return { ShipmentRequest: {
     Request: { RequestOption: 'validate', TransactionReference: { CustomerContext: order.orderNo } },
     Shipment: {

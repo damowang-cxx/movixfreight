@@ -236,3 +236,6 @@
 ## 2026-09-16 UPS 官方驱动
 
 新增 UPS_OFFICIAL，荷兰发货、管理员配置的欧盟 Standard 路线，固定服务 11，不覆盖 FedEx。供应商严格按编号使用独立 OAuth profile。创建 Shipping 中的 validate 本身创建运单，不进行第二次创建。四入口统一预检、报价预扣、持久化任务；原图和运单号先保存再做逐箱 4×6 PDF。整票取消需明确成功才建唯一会计退款待办；未知结果不自动重试。首期不接非欧盟清关、追踪和官方 Rating。见 [实施与配置说明](./13-ups-official-integration.md)。
+## 2026-09-29：UPS 比利时始发扩展
+
+UPS_OFFICIAL 在保留 NL 的基础上支持 BE 始发，按 profile 配置下发 Shipper/ShipFrom 国家；stateCode 可空。使用现有 JSON 路由快照记录始发国，未含该字段的历史 UPS 订单视为原有 NL 始发，阻止排队过程中错误换国出单。账号及环境取消保护不变，不扩大非欧盟/清关能力，不新增数据库迁移。

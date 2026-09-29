@@ -136,9 +136,9 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
           <div class="endpoint"><div class="endpoint-title"><span class="method get">GET</span><code>/shipments/:shipmentId/label/download?label_id=...</code></div><div class="endpoint-body"><p><code>READY</code> 状态可下载 PDF。UPS 已生成运单但 PDF 转换失败时也可使用具体 label_id 再次下载，仅重做本地转换，失败返回 JSON 错误，不重新打单。单箱可省略 <code>label_id</code>；多箱必须使用状态接口返回的具体 <code>label_id</code>。</p></div></div>
         </section>
         <section id="ups">
-          <h2>UPS 官方接口：荷兰与欧盟 Standard</h2>
+          <h2>UPS 官方接口：荷兰/比利时发货、欧盟 Standard</h2>
           <div class="notice">生产环境请求会创建真实运单并预扣账户余额。下方为字段格式说明，不要使用虚构地址进行生产试单。真实收寄件人及箱货数据必须由管理员确认。</div>
-          <p>填写管理员提供的 <code>shipment.supplier</code>（例如 UPS_OFFICIAL_PRODUCTION_01）和目的国家。只允许普通客户使用生产供应商；目的国必须在该供应商启用的 Standard 国家路由内。成本、利润、燃油与邮编报价全部使用系统报价，不调用 UPS Rating。</p>
+          <p>填写管理员提供的 <code>shipment.supplier</code>（例如 UPS_OFFICIAL_PRODUCTION_01）和目的国家。发件国由供应商本地配置的 <code>shipper.countryCode</code> 决定，支持 NL、BE；比利时发件人省州可留空。只允许普通客户使用生产供应商；目的国必须在该供应商启用的 Standard 国家路由内。成本、利润、燃油与邮编报价全部使用系统报价，不调用 UPS Rating。</p>
           <table><thead><tr><th>字段/阶段</th><th>UPS 规则</th></tr></thead><tbody>
           <tr><td>to_address</td><td>姓名/公司最多 35 字符、城市最多 30 字符、邮编最多 9 字符；电话规范为 6–15 位数字。地址合并后按完整单词切成最多三行，每行 35 字符。爱尔兰需要省/州代码。</td></tr>
           <tr><td>parcels</td><td>1–200 箱（仍受服务件数限制）；每箱最大 70 kg，最长边 274 cm，长加围长不超过 400 cm。重量为 kg、尺寸为 cm，自备普通包装。</td></tr>
@@ -191,7 +191,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
         </section>
         <section id="limits">
           <h2>当前边界</h2>
-          <div class="notice">已配置国家路由的 <strong>FEDEX_RELAY</strong> 和 <strong>UPS_OFFICIAL</strong> 供应商支持自动生成面单。UPS 本期仅开放荷兰发出的欧盟内 Standard 普通包裹。税务、交货条款、报关、清关与物品属性仅在相应路由已启用且具有明确承运商映射时可提交；未启用的字段不得传入，系统会明确拒绝请求。</div>
+          <div class="notice">已配置国家路由的 <strong>FEDEX_RELAY</strong> 和 <strong>UPS_OFFICIAL</strong> 供应商支持自动生成面单。UPS 本期仅开放荷兰或比利时发出的欧盟内 Standard 普通包裹。税务、交货条款、报关、清关与物品属性仅在相应路由已启用且具有明确承运商映射时可提交；未启用的字段不得传入，系统会明确拒绝请求。</div>
           <p style="margin-top:14px">当前未开放：路由轨迹、完整运单信息、服务列表、账户余额、独立运费试算、取消运单与 Webhook。<code>from_address</code> 会保存到订单，但 FedEx / UPS 均使用供应商连接的本地发件人配置，不会把此字段发送给承运商。</p>
         </section>
         <footer class="footer">Movix Freight Open API v1 · 技术支持请提供 shipment_id、请求时间及 info.code。开发调试可查看 <a href="/api/docs">Swagger API 文档</a>。</footer>

@@ -1,6 +1,6 @@
-# UPS 官方接口：荷兰发货、欧盟内 Standard
+# UPS 官方接口：荷兰/比利时发货、欧盟内 Standard
 
-更新日期：2026-09-16。本文对应当前实现，不代表已经完成 UPS 生产实单验收。
+更新日期：2026-09-29。本文对应当前实现，不代表已经完成 UPS 生产实单验收。
 
 ## 范围与实际工作流
 
@@ -10,7 +10,7 @@
 
 管理员、客户门户、Excel、Open API 都通过供应商与目的国解析同一国家路由。普通客户只能使用生产连接；管理员可选择生产或 Sandbox。首次实单验收按已确认选择使用 Production。
 
-- 首期发件国固定 NL，服务固定 UPS Standard `11`，路由类型 `DEFAULT`，清关模式 `NONE`。
+- 发件国支持 NL（荷兰）和 BE（比利时），从供应商 profile 读取，服务固定 UPS Standard `11`，路由类型 `DEFAULT`，清关模式 `NONE`。
 - 国家路由需管理员勾选已启用国家表中的 NL/欧盟目的国；无匹配、重叠、停用、非欧盟目的国及错误服务代码在下单前拒绝。
 - 荷兰和其他欧盟国家共用一张供应商成本表、一个 Standard 内部服务及其利润版本，不强制未来 UPS 只能有一个服务。
 - 不调用官方运费查询，不实现轨迹、危险品或非欧盟商业发票。
@@ -40,7 +40,7 @@
 }
 ```
 
-填写公司 UPS Developer App 的 Client ID、Client Secret、6 位寄件账号和真实荷兰发件信息；完成后设 `enabled: true`。不要把密钥发到聊天或提交 Git。旧示例中的 `ups.apiKey` 占位分块不参与此驱动。
+填写公司 UPS Developer App 的 Client ID、Client Secret、6 位寄件账号和真实荷兰或比利时发件信息；完成后设 `enabled: true`。不要把密钥发到聊天或提交 Git。旧示例中的 `ups.apiKey` 占位分块不参与此驱动。
 
 生产主机固定 `https://onlinetools.ups.com`，Sandbox 主机固定 `https://wwwcie.ups.com`，不允许在配置文件自定义 URL，不继承根级或 FedEx 配置。OAuth token 按供应商编号、环境、凭据及账号隔离缓存，使用到期前 60 秒的安全余量；并发获取同一 token 共用请求。不会把 token 放入日志或数据库。
 
@@ -91,6 +91,30 @@ UPS 明确成功后先在事务里保存整票 `ShipmentIdentificationNumber`、
 UPS 使用 `DELETE /api/shipments/v2409/void/cancel/{ShipmentIdentificationNumber}`，不带单箱筛选。只在响应与整票结果均明确成功、且返回的逐箱结果也全部成功时标记 CANCELLED；不明确、超时或部分取消不退款，需人工核查。已取消/已交运/未知状态不能重复触发此操作。
 
 系统订单尚未出单且结果明确时可本地取消。成功取消在同一事务中保留订单及原面单、创建唯一 `CancellationRefundCase`；会计确认后才产生退款流水。钱包不会因点击取消立即变化。
+
+## 比利时发货配置与升级（2026-09-29）
+
+在对应 UPS profile 中将发件地址改为真实比利时仓库地址，例如以下 `shipper` 分块；联系电话须自行填写，不要修改 FedEx profile：
+
+```json
+"shipper": {
+  "name": "EUROCUSTOMS SRL C O BS",
+  "company": "EUROCUSTOMS SRL C O BS",
+  "phone": "替换为真实联系电话",
+  "streetLines": ["INDUSTRIELAAN 31"],
+  "city": "TERNAT",
+  "postalCode": "1740",
+  "countryCode": "BE",
+  "stateCode": ""
+}
+```
+
+- `stateCode` 可以为空或省略，空值不发送；`Shipper.Address.CountryCode` 和 `ShipFrom.Address.CountryCode` 都使用配置的 BE，不再固定 NL。
+- 新订单路由快照记录 `shipperCountryCode`；无此字段的历史 UPS 订单按原实现视为 NL。排队订单若发现发件国变更，会在发送 Shipping 前拒绝；不会擅自改写历史订单。
+- 取消仍按原账号、环境和整票运单号处理，不需要因仓库发件国变更而改取消参数。不同账号仍必须建立独立连接。
+- 修改发件国前先暂停接单并让旧任务处理完成；如需要两个始发国同时运营，应建立不同供应商连接及对应成本/利润报价，不能混用不同始发地的价格。
+- **本次比利时扩展不需要新 SQL 迁移**，前提是此前 UPS 增量迁移已完成。提交推送后可按现有更新脚本部署代码，再在维护窗口配置实际发件信息；修改配置后重建 API/Worker 容器，保证文件挂载更新。UPS 账号是否允许比利时始发仍需实际授权/实单验证，代码支持不等于账号已开通。
+- 若服务器尚未部署 UPS 第一版，请先执行下节的首次迁移。
 
 ## 7. 服务器升级（首次含数据库变更）
 

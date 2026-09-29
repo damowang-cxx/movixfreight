@@ -14,7 +14,7 @@ import { routeFieldSchema } from '../connectors/connector-drivers.registry';
 function orderHarness() {
   const wallet = { id: 'wallet1', currency: 'EUR', balance: new Prisma.Decimal(100) }; let saved: any; const ledgers: any[] = []; let enqueues = 0; let quotes = 0;
   const pricing: any = { resolveDestinationCountry: async (v: string) => v === '荷兰' ? 'NL' : v.toUpperCase(), quote: async () => { quotes++; return { total: '10', currency: 'EUR' }; } };
-  const resolved: any = { accountFingerprint: 'hash', supplier: { id: 'supplier1', code: 'UPS1', driverCode: 'UPS_OFFICIAL', environment: 'PRODUCTION' }, service: { id: 'service1', code: 'UPS_STANDARD', minPieces: 1, allowsMultiPiece: true, measurementMethod: 'PER_BOX' }, route: { id: 'route1', code: 'STANDARD', routeType: 'DEFAULT', carrierServiceType: '11', fieldSchema: routeFieldSchema('UPS_OFFICIAL', 'NONE', {}) } };
+  const resolved: any = { shipperCountryCode: 'BE', accountFingerprint: 'hash', supplier: { id: 'supplier1', code: 'UPS1', driverCode: 'UPS_OFFICIAL', environment: 'PRODUCTION' }, service: { id: 'service1', code: 'UPS_STANDARD', minPieces: 1, allowsMultiPiece: true, measurementMethod: 'PER_BOX' }, route: { id: 'route1', code: 'STANDARD', routeType: 'DEFAULT', carrierServiceType: '11', fieldSchema: routeFieldSchema('UPS_OFFICIAL', 'NONE', {}) } };
   const products: any = { resolveOrderRoute: async (_id: string, country: string, allowSandbox: boolean) => { if (country !== 'NL' || resolved.supplier.environment === 'SANDBOX' && !allowSandbox) throw new Error('无可用路由'); return resolved; } };
   const db: any = { order: { findUnique: async () => saved ?? null, create: async ({ data }: any) => saved = { id: 'order1', ...data } }, customer: { findUnique: async () => ({ id: 'customer1', status: 'NORMAL', wallets: [wallet] }) }, customerWallet: { update: async ({ data }: any) => Object.assign(wallet, data) }, walletLedger: { create: async ({ data }: any) => ledgers.push(data) }, $transaction: async (cb: any, options: any) => { assert.equal(options.isolationLevel, 'Serializable'); return cb(db); } };
   const svc = new OrdersService(db, pricing, { evaluateInTransaction: async () => {} } as any, { requiredDeclarationFields: async () => [] } as any, products, { enqueue: async () => { enqueues++; } } as any);
@@ -28,6 +28,7 @@ test('admin, portal and Excel use same UPS preflight, normalized address, precha
     if (entry === 'portal') await h.svc.createForCustomer('customer1', h.input);
     if (entry === 'excel') { const preview = await h.svc.previewImportForAdmin([{ rowNo: 1, customerId: 'customer1', order: h.input }]); assert.equal(preview[0].status, 'READY'); await h.svc.importForAdmin('fixture.xlsx', [{ rowNo: 1, customerId: 'customer1', order: h.input }]); }
     assert.equal(h.wallet.balance.toString(), '90'); assert.equal(h.ledgers.length, 1); assert.equal(h.saved().dispatchJob.create.status, 'PENDING');
+    assert.equal(h.saved().supplierRouteSnapshot.shipperCountryCode, 'BE');
     assert.equal(h.saved().recipientAddressLine1, 'ABCDEFGHIJKLMNOPQRSTUVW 12'); assert.equal(h.saved().recipientCountryCode, 'NL');
     assert.equal(h.saved().supplierRouteSnapshot.packageOrder.length, 2); assert.ok(h.saved().boxes.create[0].boxNo.startsWith('ORD-'));
     assert.equal(h.counts().enqueues, 1);
@@ -45,6 +46,9 @@ test('UPS country routes require exact configured profile, enabled service, uniq
   const db: any = { country: { findFirst: async () => ({ code: 'NL' }) }, supplier: { findFirst: async () => supplier } };
   const products = new ProductsService(db, {} as any, config);
   assert.equal((await products.resolveOrderRoute('supplier1', '荷兰', true)).route.carrierServiceType, '11');
+  assert.equal((await products.resolveOrderRoute('supplier1', '荷兰', true)).shipperCountryCode, 'NL');
+  (config as any).profiles = () => ({ UPS1: { ...profile, shipper: { ...profile.shipper, countryCode: 'BE', postalCode: '1740', city: 'TERNAT', stateCode: '' } } });
+  assert.equal((await products.resolveOrderRoute('supplier1', '荷兰', true)).shipperCountryCode, 'BE');
   supplier.countryRoutes[0].service.enabled = false; await assert.rejects(products.resolveOrderRoute('supplier1', '荷兰', true), /停用/); supplier.countryRoutes[0].service.enabled = true;
   supplier.countryRoutes.push(supplier.countryRoutes[0]); await assert.rejects(products.resolveOrderRoute('supplier1', '荷兰', true), /多个/); supplier.countryRoutes.pop();
   supplier.countryRoutes[0].carrierServiceType = '07'; await assert.rejects(products.resolveOrderRoute('supplier1', '荷兰', true), /Standard/); supplier.countryRoutes[0].carrierServiceType = '11';
