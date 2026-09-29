@@ -9,3 +9,4 @@ config/connectors.production.json
 coverage/
 *.log
 apps/api/prisma/dev.db
+/tmp/*.dump

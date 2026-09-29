@@ -1,0 +1,14 @@
+.git
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+**/.env
+**/.env.production
+**/.env.*.local
+config/connectors.local.json
+config/connectors.production.json
+tmp
+**/*.dump
+**/*.log
+.playwright-cli

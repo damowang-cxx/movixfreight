@@ -20,6 +20,7 @@ export class CustomerOrdersController {
   @Get('orderable-suppliers') suppliers() { return this.orders.orderableSuppliers(false); }
   @Get('route') route(@Query('supplierId') supplierId = '', @Query('country') country = '') { return this.orders.resolveOrderRoute(supplierId, country, false); }
   @Post() create(@CurrentUser() customer: AuthPrincipal, @Body() input: CreateOrderDto) { return this.orders.createForCustomer(customer.sub, input); }
+  @Post('quote') quote(@CurrentUser() customer: AuthPrincipal, @Body() input: CreateOrderDto) { return this.orders.quoteForCustomer(customer.sub, input); }
   @Get() list(@CurrentUser() customer: AuthPrincipal) { return this.orders.listForCustomer(customer.sub); }
   @Get('dispatch-status') dispatchStatus(@CurrentUser() customer: AuthPrincipal, @Query('ids') ids = '') { return this.orders.dispatchStatusesForCustomer(customer.sub, ids.split(',')); }
   @Get(':orderId') get(@CurrentUser() customer: AuthPrincipal, @Param('orderId') orderId: string) { return this.orders.getForCustomer(customer.sub, orderId); }
@@ -27,8 +28,8 @@ export class CustomerOrdersController {
   async downloadLabel(@CurrentUser() customer: AuthPrincipal, @Param('orderId') orderId: string, @Param('labelId') labelId: string, @Res() response: Response) {
     const label = await this.orders.getLabelForCustomer(customer.sub, orderId, labelId);
     const type = label.contentType.toUpperCase().includes('PDF') || Buffer.from(label.content).subarray(0, 4).toString('ascii') === '%PDF' ? 'application/pdf' : 'application/octet-stream';
-    const filename = `fedex-${label.trackingNumber ?? label.id}.${type === 'application/pdf' ? 'pdf' : 'bin'}`;
-    const content = type === 'application/pdf' ? await this.labelPdf.forPreviewOrDownload(label.content, label.contentType) : label.content;
+    const filename = `label-${label.trackingNumber ?? label.id}.${type === 'application/pdf' ? 'pdf' : 'bin'}`;
+    const content = type === 'application/pdf' ? await this.labelPdf.forPreviewOrDownload(label.content, label.contentType, label.sourceContent ? 'UPS_OFFICIAL' : 'FEDEX_RELAY') : label.content;
     response.setHeader('Content-Type', type); response.setHeader('Content-Disposition', `attachment; filename="${filename}"`); response.send(content);
   }
 }

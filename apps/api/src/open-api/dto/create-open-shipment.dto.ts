@@ -26,8 +26,8 @@ export class OpenDeclarationDto {
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) width?: number;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) height?: number;
   @IsOptional() @IsString() sku?: string;
-  @IsString() name_cn!: string;
-  @IsString() name_en!: string;
+  @IsOptional() @IsString() name_cn?: string;
+  @IsOptional() @IsString() name_en?: string;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) unit_price?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) quantity?: number;
   @IsOptional() @IsString() material?: string;

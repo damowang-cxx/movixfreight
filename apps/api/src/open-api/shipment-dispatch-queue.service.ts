@@ -4,7 +4,7 @@ import { ShipmentDispatchJobStatus, ShipmentStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { createConnection } from 'net';
 import { PrismaService } from '../database/prisma.service';
-import { FedexValidationService } from '../orders/fedex-validation.service';
+import { ShipmentOperationsService } from '../orders/shipment-operations.service';
 
 type DispatchPayload = { orderId: string };
 
@@ -17,7 +17,7 @@ export class ShipmentDispatchQueueService implements OnModuleInit, OnModuleDestr
   private redisUnavailableLogged = false;
   private readonly workerEnabled: boolean;
 
-  constructor(private readonly config: ConfigService, private readonly prisma: PrismaService, private readonly fedex: FedexValidationService) {
+  constructor(private readonly config: ConfigService, private readonly prisma: PrismaService, private readonly operations: ShipmentOperationsService) {
     this.workerEnabled = this.config.get<string>('DISPATCH_WORKER_ENABLED') !== 'false';
   }
 
@@ -57,7 +57,7 @@ export class ShipmentDispatchQueueService implements OnModuleInit, OnModuleDestr
     const claim = await this.prisma.shipmentDispatchJob.updateMany({ where: { orderId, status: ShipmentDispatchJobStatus.PENDING, order: { shipmentStatus: ShipmentStatus.SUBMITTED } }, data: { status: ShipmentDispatchJobStatus.PROCESSING, stage: 'VALIDATING', reasonCode: 'VALIDATING', publicMessage: '正在校验订单信息', attempts: { increment: 1 }, startedAt: new Date(), claimedAt: new Date(), errorMessage: null } });
     if (claim.count !== 1) return;
     try {
-      await this.fedex.create(orderId, async (stage) => {
+      await this.operations.create(orderId, async (stage) => {
         await this.prisma.shipmentDispatchJob.updateMany({ where: { orderId, status: ShipmentDispatchJobStatus.PROCESSING }, data: { stage, reasonCode: stage, publicMessage: stage === 'VALIDATING' ? '正在校验订单信息' : '正在向供应商生成面单' } });
       });
       await this.prisma.shipmentDispatchJob.update({ where: { orderId }, data: { status: ShipmentDispatchJobStatus.COMPLETED, stage: 'READY', reasonCode: 'LABEL_READY', publicMessage: '面单已生成，可预览或下载 PDF', errorMessage: null, completedAt: new Date() } });
@@ -71,12 +71,13 @@ export class ShipmentDispatchQueueService implements OnModuleInit, OnModuleDestr
       const stage = (await this.prisma.shipmentDispatchJob.findUnique({ where: { orderId }, select: { stage: true } }))?.stage;
       const validationFailed = stage === 'VALIDATING';
       const safeDetail = this.safeSupplierError(error);
-      const publicMessage = status === ShipmentDispatchJobStatus.UNKNOWN
+      const pdfFailure = order?.shipmentStatus === ShipmentStatus.GENERATED;
+      const publicMessage = pdfFailure ? '运单已生成，PDF 处理失败；可再次预览/下载仅重做本地转换' : status === ShipmentDispatchJobStatus.UNKNOWN
         ? '供应商处理结果未知，请勿重复下单并联系管理员核查'
         : validationFailed
           ? `供应商校验未通过${safeDetail ? `：${safeDetail}` : '，请检查收件信息、申报信息或服务配置'}`
           : `供应商拒绝生成面单${safeDetail ? `：${safeDetail}` : '，请检查订单信息'}`;
-      await this.prisma.shipmentDispatchJob.update({ where: { orderId }, data: { status, stage: status === ShipmentDispatchJobStatus.UNKNOWN ? 'UNKNOWN' : 'FAILED', reasonCode: status === ShipmentDispatchJobStatus.UNKNOWN ? 'SUPPLIER_RESULT_UNKNOWN' : validationFailed ? 'VALIDATION_REJECTED' : 'SUPPLIER_REJECTED', publicMessage, errorMessage: detail, completedAt: new Date() } });
+      await this.prisma.shipmentDispatchJob.update({ where: { orderId }, data: { status, stage: status === ShipmentDispatchJobStatus.UNKNOWN ? 'UNKNOWN' : 'FAILED', reasonCode: pdfFailure ? 'LABEL_PROCESSING_FAILED' : status === ShipmentDispatchJobStatus.UNKNOWN ? 'SUPPLIER_RESULT_UNKNOWN' : validationFailed ? 'VALIDATION_REJECTED' : 'SUPPLIER_REJECTED', publicMessage, errorMessage: detail, completedAt: new Date() } });
     }
   }
 
@@ -90,7 +91,7 @@ export class ShipmentDispatchQueueService implements OnModuleInit, OnModuleDestr
     if (!await this.redisAvailable()) {
       if (!this.redisUnavailableLogged) {
         this.redisUnavailableLogged = true;
-        this.logger.warn('Redis 未启动，Open API 面单任务将保持待处理；Redis 恢复后会自动投递');
+        this.logger.warn('Redis 未启动，面单任务将保持待处理；Redis 恢复后会自动投递');
       }
       return;
     }
@@ -102,7 +103,7 @@ export class ShipmentDispatchQueueService implements OnModuleInit, OnModuleDestr
     }
     this.redisUnavailableLogged = false;
     await this.enqueuePending();
-    this.logger.log(this.workerEnabled ? 'Open API 面单任务队列与 Worker 已连接 Redis' : 'Open API 面单任务队列已连接 Redis（当前实例不执行 Worker）');
+    this.logger.log(this.workerEnabled ? '面单任务队列与 Worker 已连接 Redis' : '面单任务队列已连接 Redis（当前实例不执行 Worker）');
   }
 
   private async enqueuePending() {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CostPostcodeRuleType } from '@prisma/client';
+import { CostPostcodeRuleType, Prisma } from '@prisma/client';
 import { PricingService } from './pricing.service';
 
 const countries = [
@@ -62,4 +62,20 @@ test('成本模板拒绝重叠的同国数字邮编区间', async () => {
     '挂号费\t\t0\t0\t0',
     '操作费\t\t0\t0\t0',
   ].join('\n')), /重叠或重复/);
+});
+
+test('多箱按票计重汇总体积重后与整票重量取大值，仍按实际箱数应用最低费用', async () => {
+  const d = (n: number) => new Prisma.Decimal(n);
+  const pricing = new PricingService({
+    country: { createMany: async () => ({}), findFirst: async () => countries[1] },
+    service: { findUnique: async () => ({ enabled: true, supplierId: 'UPS1', code: 'STANDARD', measurementMethod: 'PER_SHIPMENT', billingMethod: 'MAX_ACTUAL_OR_VOLUMETRIC', volumetricDivisor: d(5000), supplier: { enabled: true, carrier: { enabled: true, fuelSurcharges: [] } } }) },
+    supplierCostVersion: { findMany: async () => [{ versionNo: 'cost1', currency: 'EUR', minWeightKg: d(0), maxWeightKg: d(100), minBoxes: 1, maxBoxes: 10, rows: [{ countryCode: 'NL', postcodeRuleType: 'DEFAULT', postcodeRuleStart: '', minimumPerBox: d(3), minimumPerShipment: d(0), registrationFee: d(0), operationFeePerKg: d(0), tiers: [{ minKg: d(0), maxKg: d(100), fixedAmount: d(2), billingUnit: 'PER_KG' }] }] }] },
+  } as any);
+  (pricing as any).resolveProfitVersion = async () => ({ version: { versionNo: 'profit1', id: 'p1', scope: 'DEFAULT' }, row: { countryCode: 'NL', mode: 'FIXED_AMOUNT', value: d(1) } });
+  const boxes = [{ lengthCm: '30', widthCm: '20', heightCm: '20' }, { lengthCm: '30', widthCm: '20', heightCm: '20' }];
+  const quote = await pricing.quote('customer1', 'service1', 'NL', ['2'], '1012JS', boxes);
+  assert.equal(Number(quote.calculatedChargeableWeightsKg[0]), 4.8);
+  assert.equal(quote.total, '10.60');
+  const final = await pricing.quote('customer1', 'service1', 'NL', ['2'], '1012JS', boxes, { useProvidedChargeableWeights: true });
+  assert.equal(final.total, '7.00');
 });

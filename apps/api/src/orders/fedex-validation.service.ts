@@ -122,6 +122,8 @@ export class FedexValidationService {
   }
 
   private assertFedexChannel(order: Awaited<ReturnType<FedexValidationService['load']>>) {
+    const snapshot = order.supplierRouteSnapshot as any;
+    if (snapshot?.driverCode && (snapshot.driverCode !== 'FEDEX_RELAY' || snapshot.environment !== order.service.supplier.environment || snapshot.supplierId !== order.service.supplier.id || snapshot.supplierCode !== order.service.supplier.code)) throw new ConflictException('订单创建后的供应商连接或环境被修改，不能调用 FedEx');
     const config = this.config.status(order.service.supplier.code, order.service.supplier.environment === 'PRODUCTION');
     if (order.service.supplier.driverCode !== 'FEDEX_RELAY' || !order.service.supplier.enabled || !config.configured || config.environment.toUpperCase() !== order.service.supplier.environment) throw new ConflictException('FedEx 供应商连接环境与当前连接配置不匹配，不能创建面单');
     this.config.assertReady(order.service.supplier.code);

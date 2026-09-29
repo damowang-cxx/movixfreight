@@ -55,3 +55,5 @@
 2. 代码完成、验证结果和限制更新到 `00-current-development-status.md` 与 `docs/implementation-log.md`。
 3. 供应商密钥、账户信息、访问令牌和客户隐私数据不得写入任何设计文档或提交到仓库。
 4. 涉及余额、退款、补扣、面单创建和供应商未知结果的变更，必须同时说明授权、审计和幂等处理。
+
+- [13 · UPS 官方接口：Standard、逐箱 PDF、整票取消与升级](./13-ups-official-integration.md)

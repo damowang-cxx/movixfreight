@@ -6,6 +6,7 @@ import { Transform, Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, Matches, Min, ValidateNested } from 'class-validator';
 import { CurrentUser, RequireAdminRoles } from '../auth/decorators';
 import type { AuthPrincipal } from '../auth/auth.types';
+import { ShipmentOperationsService } from './shipment-operations.service';
 import { FedexValidationService } from './fedex-validation.service';
 import { OrdersService } from './orders.service';
 import { LabelPdfService } from './label-pdf.service';
@@ -21,7 +22,7 @@ class ImportOrdersDto { @IsString() sourceFileName!: string; @IsArray() @Validat
 @RequireAdminRoles(AdminRole.SUPER_ADMIN, AdminRole.OPERATIONS)
 @Controller('admin/v1/orders')
 export class OrdersAdminController {
-  constructor(private readonly fedex: FedexValidationService, private readonly orders: OrdersService, private readonly labelPdf: LabelPdfService) {}
+  constructor(private readonly fedex: FedexValidationService, private readonly orders: OrdersService, private readonly labelPdf: LabelPdfService, private readonly operations: ShipmentOperationsService) {}
   @Get()
   list() { return this.orders.listForAdmin(); }
   @Get('orderable-suppliers') orderableSuppliers() { return this.orders.orderableSuppliers(true); }
@@ -30,6 +31,8 @@ export class OrdersAdminController {
   dispatchStatus(@Query('ids') ids = '') { return this.orders.dispatchStatusesForAdmin(ids.split(',')); }
   @Post()
   create(@Body() input: CreateAdminOrderDto) { const { customerId, ...order } = input; return this.orders.createForAdmin(customerId, order); }
+  @Post('quote')
+  quote(@Body() input: CreateAdminOrderDto) { const { customerId, ...order } = input; return this.orders.quoteForCustomer(customerId, order, true); }
   @Post('import/preview')
   previewImport(@Body() input: ImportOrdersDto) { return this.orders.previewImportForAdmin(input.rows); }
   @Post('import/commit')
@@ -40,13 +43,15 @@ export class OrdersAdminController {
   validateFedex(@Param('orderId') orderId: string) { return this.fedex.validate(orderId); }
   @Post(':orderId/fedex/create')
   createFedex(@Param('orderId') orderId: string) { return this.fedex.create(orderId); }
+  @Post(':orderId/cancel')
+  cancel(@Param('orderId') orderId: string, @CurrentUser() operator: AuthPrincipal) { return this.operations.cancel(orderId, operator.sub); }
   @Post(':orderId/fedex/cancel')
   cancelFedex(@Param('orderId') orderId: string, @CurrentUser() operator: AuthPrincipal) { return this.fedex.cancel(orderId, operator.sub); }
   @Get(':orderId/labels/:labelId/inline')
   async inlineLabel(@Param('orderId') orderId: string, @Param('labelId') labelId: string, @Res() response: Response) {
     const label = await this.orders.getLabelForAdmin(orderId, labelId);
     const type = label.contentType.toUpperCase().includes('PDF') || Buffer.from(label.content).subarray(0, 4).toString('ascii') === '%PDF' ? 'application/pdf' : 'application/octet-stream';
-    const content = type === 'application/pdf' ? await this.labelPdf.forPreviewOrDownload(label.content, label.contentType) : label.content;
-    response.setHeader('Content-Type', type); response.setHeader('Content-Disposition', `inline; filename="fedex-${label.trackingNumber ?? label.id}.${type === 'application/pdf' ? 'pdf' : 'bin'}"`); response.send(content);
+    const content = type === 'application/pdf' ? await this.labelPdf.forPreviewOrDownload(label.content, label.contentType, label.sourceContent ? 'UPS_OFFICIAL' : 'FEDEX_RELAY') : label.content;
+    response.setHeader('Content-Type', type); response.setHeader('Content-Disposition', `inline; filename="label-${label.trackingNumber ?? label.id}.${type === 'application/pdf' ? 'pdf' : 'bin'}"`); response.send(content);
   }
 }

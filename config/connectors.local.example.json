@@ -52,6 +52,22 @@
       "countryCode": "NL"
     }
   },
+  "upsOfficial": {
+    "profiles": {
+      "UPS_OFFICIAL_PRODUCTION_01": {
+        "enabled": false,
+        "environment": "production",
+        "clientId": "",
+        "clientSecret": "",
+        "shipperNumber": "",
+        "shipper": {
+          "name": "", "company": "", "phone": "",
+          "streetLines": [""], "city": "", "stateCode": "",
+          "postalCode": "", "countryCode": "NL"
+        }
+      }
+    }
+  },
   "ups": {
     "enabled": false,
     "environment": "sandbox",

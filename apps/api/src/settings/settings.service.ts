@@ -34,12 +34,12 @@ const labelOptions = {
 
 export const labelTemplateCapabilities = (driverCode: string) => ({
   driverCode,
-  standardLabelSpecification: driverCode === 'FEDEX_RELAY',
+  standardLabelSpecification: ['FEDEX_RELAY', 'UPS_OFFICIAL'].includes(driverCode),
   carrierCustomThermalContent: false,
   supportedOutputFormats: driverCode === 'FEDEX_RELAY' ? Object.keys(labelOptions) : ['PDF'],
   message: driverCode === 'FEDEX_RELAY'
     ? 'FedEx Direct 会透传标准标签规格。自定义热敏文字、图形与坐标尚未确认中转服务的字段透传能力，当前仅用于模板预览，不会随订单下发。'
-    : '该供应商驱动尚未实现面单规格下发；模板仅用于预览。',
+    : driverCode === 'UPS_OFFICIAL' ? 'UPS 固定 GIF 原图转换为 4×6 PDF，约 2 mm 白边；不支持自定义布局。' : '该供应商驱动尚未实现面单规格下发；模板仅用于预览。',
 });
 
 @Injectable()
@@ -139,6 +139,7 @@ export class SettingsService {
     if (!supplierId || !name) throw new BadRequestException('请选择供应商连接并填写模板名称');
     const supplier = await this.prisma.supplier.findUnique({ where: { id: supplierId }, select: { id: true, driverCode: true } });
     if (!supplier) throw new BadRequestException('供应商连接不存在');
+    if (supplier.driverCode === 'UPS_OFFICIAL' && (outputFormat !== 'PDF' || labelStockType !== 'PAPER_4X6' || input.customElements?.length)) throw new BadRequestException('UPS 仅支持固定 4×6 PDF，不支持自定义布局');
     if (!(outputFormat in labelOptions) || !(labelOptions[outputFormat as keyof typeof labelOptions] as readonly string[]).includes(labelStockType)) throw new BadRequestException('面单输出格式与标签规格不匹配');
     const thermal = outputFormat === 'ZPLII' || outputFormat === 'EPL2'; const thermalDpi = input.thermalDpi == null ? null : Number(input.thermalDpi);
     if (thermal && thermalDpi !== 203 && thermalDpi !== 300) throw new BadRequestException('热敏模板仅支持 203 或 300 DPI');

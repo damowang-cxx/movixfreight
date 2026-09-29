@@ -36,9 +36,9 @@ export class OpenApiShipmentsController {
   async download(@CurrentOpenApiCustomer() customer: OpenApiPrincipal, @Param('shipmentId') shipmentId: string, @Query('label_id') labelId: string | undefined, @Res() response: Response) {
     const label = await this.shipments.labelFile(customer, shipmentId, labelId);
     const type = label.contentType.toUpperCase().includes('PDF') || Buffer.from(label.content).subarray(0, 4).toString('ascii') === '%PDF' ? 'application/pdf' : 'application/octet-stream';
-    const content = type === 'application/pdf' ? await this.labelPdf.forPreviewOrDownload(label.content, label.contentType) : label.content;
+    const content = type === 'application/pdf' ? await this.labelPdf.forPreviewOrDownload(label.content, label.contentType, label.sourceContent ? 'UPS_OFFICIAL' : 'FEDEX_RELAY') : label.content;
     response.setHeader('Content-Type', type);
-    response.setHeader('Content-Disposition', `attachment; filename="fedex-${label.trackingNumber ?? label.id}.${type === 'application/pdf' ? 'pdf' : 'bin'}"`);
+    response.setHeader('Content-Disposition', `attachment; filename="label-${label.trackingNumber ?? label.id}.${type === 'application/pdf' ? 'pdf' : 'bin'}"`);
     response.send(content);
   }
 }

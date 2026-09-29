@@ -285,3 +285,7 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 如果旧服务已经停止，先按其原有启动方式恢复它，再回滚 Nginx。数据库迁移与真实订单不可通过 Nginx 回滚；上线前务必完成数据库备份和小额人工验收。
+
+## 2026-09-16：UPS 官方驱动增量升级
+
+本次增加 `migrate-ups-official-labels.sql`，首次不能只运行自动更新脚本。先备份、等待面单任务结束、执行可审阅增量迁移，再重建 API、Worker 和两个前端。详见 [UPS 官方接入与服务器升级](./system-design/13-ups-official-integration.md#7-服务器升级首次含数据库变更)。UPS profile 合并到原配置的 `upsOfficial.profiles`，不覆盖 FedEx。生产实单请求有真实业务后果，必须使用管理员指定数据。

@@ -35,3 +35,9 @@ test('供应商未接入自动打单时显示已阻止而非伪造面单状态',
   assert.equal(summary.message, '当前供应商连接暂不支持自动生成面单');
   assert.equal(summary.retryAllowed, false);
 });
+
+test('取消结果未知优先于旧的已完成面单任务，不能错误显示已生成', () => {
+  const result = service().dispatchSummary({ shipmentStatus: ShipmentStatus.UNKNOWN, labels: [{ id: 'label1' }], dispatchJob: { status: ShipmentDispatchJobStatus.COMPLETED, stage: 'READY', reasonCode: 'LABEL_READY', publicMessage: '面单已生成' } }, false);
+  assert.equal(result.status, 'UNKNOWN');
+  assert.equal(result.retryAllowed, false);
+});

@@ -5,15 +5,15 @@ import { OrdersService } from '../orders/orders.service';
 import { PricingService } from '../pricing/pricing.service';
 import type { OpenApiPrincipal } from './open-api-auth.guard';
 import type { CreateOpenShipmentDto, OpenAddressDto, OpenShipmentDto } from './dto/create-open-shipment.dto';
-import { normalizeRecipientAddress } from '../orders/recipient-address';
+import { UpsLabelService } from '../orders/ups-label.service';
 
 const ENGLISH_COUNTRIES: Record<string, string> = {
-  austria: 'AT', belgium: 'BE', bulgaria: 'BG', china: 'CN', croatia: 'HR', czechia: 'CZ', 'czech republic': 'CZ', denmark: 'DK', estonia: 'EE', finland: 'FI', france: 'FR', germany: 'DE', greece: 'GR', hungary: 'HU', ireland: 'IE', italy: 'IT', latvia: 'LV', lithuania: 'LT', luxembourg: 'LU', netherlands: 'NL', norway: 'NO', poland: 'PL', portugal: 'PT', romania: 'RO', slovakia: 'SK', slovenia: 'SI', spain: 'ES', sweden: 'SE', switzerland: 'CH', 'united kingdom': 'GB', uk: 'GB', england: 'GB', 'great britain': 'GB',
+  austria: 'AT', belgium: 'BE', bulgaria: 'BG', china: 'CN', croatia: 'HR', cyprus: 'CY', malta: 'MT', czechia: 'CZ', 'czech republic': 'CZ', denmark: 'DK', estonia: 'EE', finland: 'FI', france: 'FR', germany: 'DE', greece: 'GR', hungary: 'HU', ireland: 'IE', italy: 'IT', latvia: 'LV', lithuania: 'LT', luxembourg: 'LU', netherlands: 'NL', norway: 'NO', poland: 'PL', portugal: 'PT', romania: 'RO', slovakia: 'SK', slovenia: 'SI', spain: 'ES', sweden: 'SE', switzerland: 'CH', 'united kingdom': 'GB', uk: 'GB', england: 'GB', 'great britain': 'GB',
 };
 
 @Injectable()
 export class OpenApiShipmentsService {
-  constructor(private readonly prisma: PrismaService, private readonly orders: OrdersService, private readonly pricing: PricingService) {}
+  constructor(private readonly prisma: PrismaService, private readonly orders: OrdersService, private readonly pricing: PricingService, private readonly upsLabels: UpsLabelService) {}
 
   async create(customer: OpenApiPrincipal, idempotencyKey: string | undefined, input: CreateOpenShipmentDto) {
     if (!idempotencyKey?.trim()) throw new BadRequestException('缺少 Idempotency-Key 请求头');
@@ -52,20 +52,8 @@ export class OpenApiShipmentsService {
       fromAddress: normalized.fromAddress,
       toAddress: normalized.toAddress,
       boxes: normalized.boxes,
-    });
+    }, { openRequest: { idempotencyKeyHash: keyHash, requestHash } });
 
-    try {
-      await this.prisma.$transaction([
-        this.prisma.openApiIdempotencyRecord.create({ data: { customerId: customer.customerId, idempotencyKeyHash: keyHash, requestHash, orderId: order.id } }),
-      ]);
-    } catch (error) {
-      const recovered = await this.prisma.openApiIdempotencyRecord.findUnique({ where: { customerId_idempotencyKeyHash: { customerId: customer.customerId, idempotencyKeyHash: keyHash } }, include: { order: { include: { dispatchJob: true } } } });
-      if (recovered) {
-        if (recovered.requestHash !== requestHash) throw new ConflictException('同一 Idempotency-Key 对应的请求内容不一致');
-        return this.accepted(recovered.order);
-      }
-      throw error;
-    }
     const accepted = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { dispatchJob: true } });
     return this.accepted(accepted);
   }
@@ -75,27 +63,27 @@ export class OpenApiShipmentsService {
     const status = this.labelStatus(order);
     const base = `/api/open/v1/shipments/${encodeURIComponent(order.orderNo)}/label`;
     const dispatch = this.orders.dispatchSummary(order as any, false);
-    return { shipment: { shipment_id: order.orderNo, client_reference: order.clientReference, label_status: status, label_status_message: this.labelStatusMessage(status), dispatch, transfer_number: status === 'READY' ? order.carrierTrackingNumber : null, label_count: order.labels.length, labels: status === 'READY' ? order.labels.map((label) => ({ label_id: label.id, tracking_number: label.trackingNumber ?? order.carrierTrackingNumber, download_url: `${base}/download?label_id=${encodeURIComponent(label.id)}` })) : [], label_download_url: `${base}/download`, failure_reason: status === 'FAILED' || status === 'UNKNOWN' || dispatch.status === 'STALLED' ? dispatch.message : null } };
+    return { shipment: { shipment_id: order.orderNo, client_reference: order.clientReference, label_status: status, label_status_message: this.labelStatusMessage(status), dispatch, transfer_number: order.carrierTrackingNumber ? order.carrierTrackingNumber : null, label_count: order.labels.length, labels: order.shipmentStatus === 'GENERATED' ? order.labels.map((label) => ({ label_id: label.id, box_no: label.box?.boxNo ?? null, pdf_ready: label.contentType.toLowerCase().includes('pdf'), tracking_number: label.trackingNumber ?? order.carrierTrackingNumber, download_url: `${base}/download?label_id=${encodeURIComponent(label.id)}` })) : [], label_download_url: `${base}/download`, failure_reason: status === 'FAILED' || status === 'UNKNOWN' || dispatch.status === 'STALLED' ? dispatch.message : null } };
   }
 
   async labelFile(customer: OpenApiPrincipal, shipmentId: string, labelId?: string) {
     const order = await this.loadOwned(customer.customerId, shipmentId, true);
-    if (this.labelStatus(order) !== 'READY') throw new ConflictException('面单尚未就绪');
+    if (this.labelStatus(order) !== 'READY' && order.shipmentStatus !== 'GENERATED') throw new ConflictException('面单尚未就绪');
     if (order.labels.length > 1 && !labelId) throw new ConflictException('该票订单包含多个面单，请从标签状态接口返回的 labels 中选择 label_id 下载');
     const label = labelId ? order.labels.find((item) => item.id === labelId) : order.labels[0];
     if (!label) throw new NotFoundException('面单不存在');
-    return label;
+    return this.upsLabels.ensure(label);
   }
 
   private async loadOwned(customerId: string, shipmentId: string, includeLabels: boolean) {
-    const order = await this.prisma.order.findFirst({ where: { customerId, orderNo: shipmentId }, include: { dispatchJob: true, ...(includeLabels ? { labels: { select: { id: true, trackingNumber: true, contentType: true, content: true, createdAt: true } } } : {}) } });
+    const order = await this.prisma.order.findFirst({ where: { customerId, orderNo: shipmentId }, include: { dispatchJob: true, labels: { select: { id: true, trackingNumber: true, contentType: true, content: true, sourceContent: true, box: { select: { boxNo: true } }, createdAt: true } } } });
     if (!order) throw new NotFoundException('运单不存在或无权访问');
-    return order as typeof order & { labels: Array<{ id: string; trackingNumber: string | null; contentType: string; content: Buffer; createdAt: Date }> };
+    return order;
   }
 
   private async normalizeShipment(shipment: OpenShipmentDto) {
     const toAddress = this.cleanAddress(shipment.to_address);
-    const recipientAddress = normalizeRecipientAddress([toAddress.address_1, toAddress.address_2, toAddress.address_3]);
+    const recipientAddress = { raw: [toAddress.address_1, toAddress.address_2, toAddress.address_3].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim() };
     this.assertRecipient(toAddress);
     const destinationCountryCode = await this.destinationCountryCode(toAddress.country!);
     toAddress.country = destinationCountryCode;
@@ -107,9 +95,8 @@ export class OpenApiShipmentsService {
       const parcelLabel = parcel.number?.trim() || `第 ${index + 1} 箱`;
       if (!parcel.declarations.length) throw new BadRequestException(`${parcelLabel} 至少需要一条申报明细`);
       const items = await Promise.all(parcel.declarations.map(async (item) => {
-        if (!item.name_cn.trim() || !item.name_en.trim()) throw new BadRequestException(`${parcelLabel} 的申报明细必须填写 name_cn 和 name_en`);
         return {
-          chineseName: item.name_cn.trim(), englishName: item.name_en.trim(), material: item.material?.trim() || undefined,
+          chineseName: item.name_cn?.trim() || undefined, englishName: item.name_en?.trim() || undefined, material: item.material?.trim() || undefined,
           originCountryCode: item.origin_country ? await this.countryCode(item.origin_country) : undefined,
           harmonizedCode: item.hs_code?.trim() || undefined, quantity: item.quantity,
           unitDeclaredValue: item.unit_price === undefined ? undefined : item.unit_price.toFixed(2), declaredValueCurrency: shipment.declaration_currency,
@@ -129,7 +116,7 @@ export class OpenApiShipmentsService {
   private assertRecipient(address: Record<string, any>) { if (!address.name || !address.city || !address.country || !address.postcode || (!address.address_1 && !address.address_2 && !address.address_3) || (!address.tel && !address.mobile)) throw new BadRequestException('to_address 必须填写 name、city、country、postcode、至少一个地址字段，以及 tel 或 mobile'); }
   private async destinationCountryCode(value: string) { const normalized = value.trim(); const englishCode = ENGLISH_COUNTRIES[normalized.toLowerCase()]; return this.pricing.resolveDestinationCountry(englishCode ?? normalized); }
   private async countryCode(value: string) { const normalized = value.trim(); if (/^[A-Za-z]{2}$/.test(normalized)) return normalized.toUpperCase(); const countries = await this.pricing.countries(); const chinese = countries.find((country) => country.chineseName === normalized); if (chinese) return chinese.code; const english = ENGLISH_COUNTRIES[normalized.toLowerCase()]; if (english) return english; throw new BadRequestException(`无法识别国家：${value}`); }
-  private labelStatus(order: { shipmentStatus: string; labels: unknown[]; dispatchJob?: { status: string } | null }) { if (order.shipmentStatus === 'GENERATED' && order.labels.length) return 'READY'; if (order.shipmentStatus === 'UNKNOWN' || order.dispatchJob?.status === 'UNKNOWN') return 'UNKNOWN'; if (order.shipmentStatus === 'FAILED' || order.dispatchJob?.status === 'FAILED' || order.dispatchJob?.status === 'BLOCKED') return 'FAILED'; return 'PENDING'; }
+  private labelStatus(order: { shipmentStatus: string; labels: unknown[]; dispatchJob?: { status: string; reasonCode?: string | null } | null }) { if (order.shipmentStatus === 'GENERATED' && order.dispatchJob?.reasonCode === 'LABEL_PROCESSING_FAILED') return 'FAILED'; if (order.shipmentStatus === 'GENERATED' && order.labels.length) return 'READY'; if (order.shipmentStatus === 'UNKNOWN' || order.dispatchJob?.status === 'UNKNOWN') return 'UNKNOWN'; if (order.shipmentStatus === 'FAILED' || order.dispatchJob?.status === 'FAILED' || order.dispatchJob?.status === 'BLOCKED') return 'FAILED'; return 'PENDING'; }
   private accepted(order: { orderNo: string; clientReference: string | null; dispatchJob?: unknown }) { const base = `/api/open/v1/shipments/${encodeURIComponent(order.orderNo)}/label`; return { shipment: { shipment_id: order.orderNo, client_reference: order.clientReference, label_status: 'PENDING', label_status_message: this.labelStatusMessage('PENDING'), dispatch: { status: 'PENDING', stage: 'QUEUED', message: '下单成功，正在等待面单生成', reasonCode: 'QUEUED', retryAllowed: false }, label_status_url: base, label_download_url: `${base}/download` } }; }
   private labelStatusMessage(status: 'PENDING' | 'READY' | 'FAILED' | 'UNKNOWN') {
     return { PENDING: '下单成功，正在等待面单生成', READY: '面单已生成，可下载', FAILED: '面单生成失败，请查看失败原因', UNKNOWN: '面单生成结果未知，请联系客服核查' }[status];

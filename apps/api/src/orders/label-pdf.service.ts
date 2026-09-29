@@ -24,9 +24,9 @@ export class LabelPdfService {
   // intentionally small enough that barcodes remain comfortably legible.
   private static readonly PRINT_SAFE_MARGIN = 2 / 25.4 * LabelPdfService.POINTS_PER_INCH;
 
-  async forPreviewOrDownload(content: Uint8Array, contentType: string | null | undefined): Promise<Buffer> {
+  async forPreviewOrDownload(content: Uint8Array, contentType: string | null | undefined, driverCode = 'FEDEX_RELAY'): Promise<Buffer> {
     const source = Buffer.from(content);
-    if (!this.isPdf(source, contentType)) return source;
+    if (driverCode !== 'FEDEX_RELAY' || !this.isPdf(source, contentType)) return source;
 
     try {
       const document = await PDFDocument.load(source, { ignoreEncryption: true, updateMetadata: false });

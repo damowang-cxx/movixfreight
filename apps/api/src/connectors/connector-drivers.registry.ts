@@ -16,7 +16,12 @@ export type ConnectorDriverDefinition = {
   description: string;
   businessFields: ConnectorBusinessField[];
   serviceModeField?: string;
+  allowedCountryCodes?: string[];
+  capabilities: { autoCreate: boolean; cancel: boolean; addressLineLimit: number; perBoxLabels?: boolean };
 };
+
+export const UPS_EU_COUNTRIES = ['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE'];
+export const supportsAutomaticShipment = (code: string) => getConnectorDriver(code)?.capabilities.autoCreate === true;
 
 /**
  * FedEx Direct is a transparent FedEx proxy.  These are deliberately a
@@ -67,9 +72,10 @@ export function routeFieldSchema(driverCode: string, customsMode: string, fieldC
   const commodityRequired = driverCode === 'FEDEX_RELAY' && customsMode === 'COMMODITIES';
   const preset = driverCode === 'FEDEX_RELAY' ? fedexRoutePreset(routeType ?? '') : undefined;
   return {
+    addressLineLimit: driverCode === 'UPS_OFFICIAL' ? 35 : 20,
     shipmentOptions: options,
     customsMode,
-    declarationRequired: commodityRequired ? ['englishName', 'itemWeightKg', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : [],
+    declarationRequired: commodityRequired ? ['englishName', 'itemWeightKg', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : driverCode === 'UPS_OFFICIAL' ? ['englishName'] : [],
     carrierRules: preset ? {
       serviceTypeLocked: preset.carrierServiceType,
       packageMaxWeightKg: preset.packageMaxWeightKg ?? null,
@@ -91,7 +97,19 @@ export function routeFieldSchema(driverCode: string, customsMode: string, fieldC
 
 export const connectorDrivers: ConnectorDriverDefinition[] = [
   {
+    allowedCountryCodes: UPS_EU_COUNTRIES,
+    code: 'UPS_OFFICIAL', name: 'UPS 官方接口', carrierCodes: ['UPS'],
+    description: '荷兰发货、已配置欧盟目的国 UPS Standard；自动打单、逐箱 4×6 PDF 和整票取消。凭据按供应商编号配置，生产请求会创建真实运单。',
+    capabilities: { autoCreate: true, cancel: true, addressLineLimit: 35, perBoxLabels: true },
+    serviceModeField: 'allowedServiceModes',
+    businessFields: [
+      { key: 'allowedServiceModes', label: '服务可选件数模式', type: 'MULTI_SELECT', defaultValue: ['SINGLE_ONLY', 'MULTI_PIECE'], options: [{ value: 'SINGLE_ONLY', label: '仅一件' }, { value: 'MULTI_PIECE', label: '支持多件' }] },
+      { key: 'actualDataSource', label: '实际数据来源', type: 'SELECT', defaultValue: ActualDataSource.BILL_EXCEL_IMPORT, options: [{ value: ActualDataSource.BILL_EXCEL_IMPORT, label: '供应商账单导入' }] },
+    ],
+  },
+  {
     code: 'FEDEX_RELAY',
+    capabilities: { autoCreate: true, cancel: true, addressLineLimit: 20 },
     name: 'FedEx Ship-API Direct 中转接口',
     carrierCodes: ['FEDEX'],
     description: '支持 OAuth、Validate、Create、Cancel，以及由供应商面单模板指定的标准 PDF/PNG/ZPLII/EPL2 标签规格。连接凭据由本地配置文件维护。',

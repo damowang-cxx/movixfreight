@@ -57,11 +57,11 @@ const documentHtml = String.raw`<!doctype html>
     <header class="masthead">
       <div class="eyebrow">Movix Freight · Integration reference</div>
       <h1>Open API v1</h1>
-      <p>为客户 ERP 创建运单、异步获取 FedEx 面单而设计的公开接入文档。内部管理端与客户门户接口不在本页开放范围内。</p>
+      <p>为客户 ERP 创建运单、异步获取 FedEx / UPS 面单而设计的公开接入文档。内部管理端与客户门户接口不在本页开放范围内。</p>
     </header>
     <div class="content">
       <aside aria-label="文档目录">
-        <a href="#start">开始接入</a><a href="#auth">鉴权与幂等</a><a href="#create">创建运单</a><a href="#label">查询与下载面单</a><a href="#rules">字段规则</a><a href="#errors">错误处理</a><a href="#limits">当前边界</a>
+        <a href="#start">开始接入</a><a href="#auth">鉴权与幂等</a><a href="#create">创建运单</a><a href="#label">查询与下载面单</a><a href="#ups">UPS 官方接口</a><a href="#rules">字段规则</a><a href="#errors">错误处理</a><a href="#limits">当前边界</a>
       </aside>
       <main>
         <section id="start">
@@ -133,20 +133,48 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
         <section id="label">
           <h2>查询与下载面单</h2>
           <div class="endpoint"><div class="endpoint-title"><span class="method get">GET</span><code>/shipments/:shipmentId/label</code></div><div class="endpoint-body"><p>返回 <code>PENDING</code>、<code>READY</code>、<code>FAILED</code> 或 <code>UNKNOWN</code>，并提供可直接展示的 <code>label_status_message</code>。<code>dispatch.status</code> 进一步表示等待队列、校验中、生成中、已生成、失败、结果未知、超过 10 分钟待核查或当前驱动不支持；<code>dispatch.message</code> 与 <code>reasonCode</code> 可用于页面提示和程序处理。<code>READY</code> 时返回转单号、面单数量和每张面单的下载地址。</p></div></div>
-          <div class="endpoint"><div class="endpoint-title"><span class="method get">GET</span><code>/shipments/:shipmentId/label/download?label_id=...</code></div><div class="endpoint-body"><p>仅 <code>READY</code> 状态可下载 PDF。单箱可省略 <code>label_id</code>；多箱必须使用状态接口返回的具体 <code>label_id</code>。</p></div></div>
+          <div class="endpoint"><div class="endpoint-title"><span class="method get">GET</span><code>/shipments/:shipmentId/label/download?label_id=...</code></div><div class="endpoint-body"><p><code>READY</code> 状态可下载 PDF。UPS 已生成运单但 PDF 转换失败时也可使用具体 label_id 再次下载，仅重做本地转换，失败返回 JSON 错误，不重新打单。单箱可省略 <code>label_id</code>；多箱必须使用状态接口返回的具体 <code>label_id</code>。</p></div></div>
+        </section>
+        <section id="ups">
+          <h2>UPS 官方接口：荷兰与欧盟 Standard</h2>
+          <div class="notice">生产环境请求会创建真实运单并预扣账户余额。下方为字段格式说明，不要使用虚构地址进行生产试单。真实收寄件人及箱货数据必须由管理员确认。</div>
+          <p>填写管理员提供的 <code>shipment.supplier</code>（例如 UPS_OFFICIAL_PRODUCTION_01）和目的国家。只允许普通客户使用生产供应商；目的国必须在该供应商启用的 Standard 国家路由内。成本、利润、燃油与邮编报价全部使用系统报价，不调用 UPS Rating。</p>
+          <table><thead><tr><th>字段/阶段</th><th>UPS 规则</th></tr></thead><tbody>
+          <tr><td>to_address</td><td>姓名/公司最多 35 字符、城市最多 30 字符、邮编最多 9 字符；电话规范为 6–15 位数字。地址合并后按完整单词切成最多三行，每行 35 字符。爱尔兰需要省/州代码。</td></tr>
+          <tr><td>parcels</td><td>1–200 箱（仍受服务件数限制）；每箱最大 70 kg，最长边 274 cm，长加围长不超过 400 cm。重量为 kg、尺寸为 cm，自备普通包装。</td></tr>
+          <tr><td>declarations[].name_en</td><td>每项需填写可打印英文描述，单箱所有描述以逗号空格合并后最多 35 字符。其余申报字段依全局规则；不生成清关商业发票。</td></tr>
+          <tr><td>taxwith / deliverywith / exportwith / importwith / tax_number / attrs</td><td>只能使用 0 / 空字符串 / 空数组。运费固定由公司寄件账号支付；DDP/DDU、危险品及额外清关本期不支持。特殊税务/清关区域会被拦截，管理员不得开通尚未核实的线路。</td></tr>
+          <tr><td>异步执行</td><td>本地预校验 → OAuth → 单次 Shipping（RequestOption=validate）。此 Shipping 请求直接创建运单，不再另外调用一次作为预校验。失败/未知结果不自动重试、不自动退款。</td></tr>
+          </tbody></table>
+          <h3>逐箱面单与本地 PDF 修复</h3>
+          <p>订单 <code>transfer_number</code> 是整票 ShipmentIdentificationNumber；每项 <code>labels</code> 返回 <code>box_no</code>、<code>label_id</code>、该箱 <code>tracking_number</code>、<code>pdf_ready</code> 与 <code>download_url</code>。FedEx 历史面单的 box_no 可为 null。多箱不传 label_id 会明确报错，不默认返回第一箱。</p>
+          <pre>{
+  "shipment": {
+    "shipment_id": "ORD-...",
+    "label_status": "READY",
+    "transfer_number": "1Z...",
+    "labels": [
+      { "label_id": "label-1", "box_no": "ORD-...-001",
+        "tracking_number": "1Z...", "pdf_ready": true,
+        "download_url": "/api/open/v1/shipments/ORD-.../label/download?label_id=label-1" }
+    ]
+  }
+}</pre>
+          <p>UPS GIF 原图保存于数据库，转换为 4×6 PDF，保留约 2 mm 白边。若 dispatch.reasonCode 为 <code>LABEL_PROCESSING_FAILED</code>，说明 UPS 运单已生成而本地 PDF 未就绪，label_status 为 FAILED；转单号和 labels 仍返回。使用 label_id 重试下载即可尝试本地修复，不要重建订单。其他 UNKNOWN/FAILED 不允许借此下载接口再次调用承运商。</p>
+          <p>建议每 5 秒轮询 PENDING/VALIDATING/CREATING；READY、FAILED、UNKNOWN、BLOCKED 后停止。STALLED 超过 10 分钟需联系管理员核查，不代表已取消。</p>
         </section>
         <section id="rules">
           <h2>字段规则</h2>
           <table><thead><tr><th>字段</th><th>规则</th></tr></thead><tbody>
             <tr><td>supplier</td><td>必填。供应商连接编号，例如 <code>FEDEX_RELAY_PRODUCTION_01</code>。系统会按目的国家匹配该供应商已启用的国家路由；FedEx 荷兰与泛欧订单共用该连接唯一的统一计价服务，调用方不需要也不能指定底层 serviceType；不接受 <code>service</code> 作为下单依据。</td></tr>
-            <tr><td>to_address</td><td>必填。<code>name</code>、<code>city</code>、<code>country</code>、<code>postcode</code>、至少一个地址字段，以及 <code>tel</code>/<code>mobile</code> 至少一个必填。<code>address_1/2/3</code> 会合并后重新分配为最多三段，每段不超过 20 个字符，且不会拆分完整单词。</td></tr>
+            <tr><td>to_address</td><td>必填。<code>name</code>、<code>city</code>、<code>country</code>、<code>postcode</code>、至少一个地址字段，以及 <code>tel</code>/<code>mobile</code> 至少一个必填。<code>address_1/2/3</code> 会合并后重新分配为最多三段，FedEx 每段最多 20 个 Unicode 字符；UPS 每段最多 35 个字符。不会拆分完整单词。</td></tr>
             <tr><td>country</td><td>支持启用国家表中的中文名、ISO 两位代码及既有英文名称，系统统一映射 ISO 两位代码。</td></tr>
-            <tr><td>state / state_code</td><td>均为可选；同时提供时优先使用 <code>state_code</code>，并在 FedEx 请求中传为省/州代码。</td></tr>
+            <tr><td>state / state_code</td><td>同时提供时优先使用 <code>state_code</code>。UPS 爱尔兰线路必填省/州代码（最多 5 字符），其他当前线路可选。</td></tr>
             <tr><td>parcels</td><td><code>parcel_count</code> 必须等于数组长度；<code>number</code> 可留空，系统会生成订单号前缀箱号；已填写的箱号不可重复；重量、长、宽、高均大于 0。</td></tr>
             <tr><td>荷兰本土路由</td><td>目的国 <code>NL</code> 自动使用 <code>FEDEX_PRIORITY</code>，不下发跨境清关货品。</td></tr>
             <tr><td>泛欧经济型路由</td><td>管理员已配置的非 NL 欧洲目的国自动使用 <code>FEDEX_REGIONAL_ECONOMY</code>。每条申报明细必须有 <code>name_en</code>、<code>weight</code>（商品净重 kg）、<code>origin_country</code>、<code>hs_code</code>、<code>quantity</code>、<code>unit_price</code> 与申报币种；商品净重合计不得超过箱重，单箱最多 68 kg。税费固定由发件人支付。</td></tr>
-            <tr><td>declarations</td><td>每项 <code>name_cn</code>、<code>name_en</code> 必填；泛欧经济型还要求上述清关字段。路由要求时系统会明确拒绝缺失或无效字段。</td></tr>
-            <tr><td>税务/贸易字段</td><td>当前 FedEx 两条线路仅接受默认值；<code>taxwith</code>、<code>deliverywith</code>、<code>exportwith</code>、<code>importwith</code> 与 <code>attrs</code> 的非默认值会被拒绝，避免静默丢失。</td></tr>
+            <tr><td>declarations</td><td>必填项由全局申报规则及所选供应商路由共同确定。UPS 必须填写可打印英文 <code>name_en</code>；FedEx 泛欧经济型还要求上述清关字段。路由要求时系统会明确拒绝缺失或无效字段。</td></tr>
+            <tr><td>税务/贸易字段</td><td>当前 FedEx 和 UPS 线路仅接受默认值；<code>taxwith</code>、<code>deliverywith</code>、<code>exportwith</code>、<code>importwith</code> 与 <code>attrs</code> 的非默认值会被拒绝，避免静默丢失。</td></tr>
             <tr><td>declaration_currency</td><td>仅支持 <code>EUR</code>、<code>GBP</code>。</td></tr>
           </tbody></table>
           <h3>物品属性 attrs</h3><div class="chips"><span class="chip">elec</span><span class="chip">magnetic</span><span class="chip">danger</span><span class="chip">liquid</span><span class="chip">powder</span><span class="chip">paste</span><span class="chip">sensitive_goods</span><span class="chip">wood</span><span class="chip">textile</span></div>
@@ -159,12 +187,12 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
   "time": 1780000000000,
   "data": null
 }</pre></div>
-          <table><thead><tr><th>HTTP</th><th>含义</th></tr></thead><tbody><tr><td>401</td><td>缺少或无效 API Key。</td></tr><tr><td>403</td><td>客户状态、数据归属或下单权限不满足要求。</td></tr><tr><td>409</td><td>同一幂等键对应不同请求体。</td></tr><tr><td>422</td><td>业务字段、服务能力、余额或供应商能力校验未通过。</td></tr></tbody></table>
+          <table><thead><tr><th>HTTP</th><th>含义</th></tr></thead><tbody><tr><td>401</td><td>缺少或无效 API Key。</td></tr><tr><td>403</td><td>客户状态、数据归属或下单权限不满足要求。</td></tr><tr><td>400</td><td>请求字段不合法或当前线路不支持。</td></tr><tr><td>409</td><td>幂等冲突、路由配置冲突或多箱缺少 label_id。</td></tr><tr><td>503</td><td>配置未就绪或 PDF 本地处理失败，见 info.message。</td></tr><tr><td>422</td><td>业务字段、服务能力、余额或供应商能力校验未通过。</td></tr></tbody></table>
         </section>
         <section id="limits">
           <h2>当前边界</h2>
-          <div class="notice">当前仅已配置国家路由的 <strong>FEDEX_RELAY</strong> 供应商支持自动生成面单。税务、交货条款、报关、清关与物品属性仅在相应路由已启用且具有明确承运商映射时可提交；未启用的字段不得传入，系统会明确拒绝请求。</div>
-          <p style="margin-top:14px">当前未开放：路由轨迹、完整运单信息、服务列表、账户余额、独立运费试算、取消运单与 Webhook。<code>from_address</code> 会保存到订单，但 FedEx 仍使用供应商连接的本地发件人配置。</p>
+          <div class="notice">已配置国家路由的 <strong>FEDEX_RELAY</strong> 和 <strong>UPS_OFFICIAL</strong> 供应商支持自动生成面单。UPS 本期仅开放荷兰发出的欧盟内 Standard 普通包裹。税务、交货条款、报关、清关与物品属性仅在相应路由已启用且具有明确承运商映射时可提交；未启用的字段不得传入，系统会明确拒绝请求。</div>
+          <p style="margin-top:14px">当前未开放：路由轨迹、完整运单信息、服务列表、账户余额、独立运费试算、取消运单与 Webhook。<code>from_address</code> 会保存到订单，但 FedEx / UPS 均使用供应商连接的本地发件人配置，不会把此字段发送给承运商。</p>
         </section>
         <footer class="footer">Movix Freight Open API v1 · 技术支持请提供 shipment_id、请求时间及 info.code。开发调试可查看 <a href="/api/docs">Swagger API 文档</a>。</footer>
       </main>
