@@ -2,7 +2,35 @@
 
 客户 ERP 使用独立前缀 `https://{host}/api/open/v1`，不得调用管理端或客户门户接口。
 
-## 在线文档
+## 本地接口验收脚本
+
+仓库提供 `infra/scripts/test-open-api.mjs`（Node.js 20+，无需额外依赖，Windows/Linux 均可运行）。默认连接 `https://movixfreight.com`，可用 `--base https://实际域名` 修改。每次运行隐藏输入客户 API Key，也可读取 `MOVIX_API_KEY` 环境变量；不要将密钥写进脚本、JSON 或命令行历史。
+
+先用同一客户名下的现有系统订单号验证鉴权与下载，不产生新订单：
+
+```sh
+node infra/scripts/test-open-api.mjs --shipment ORD-实际系统订单号 --wait --download
+```
+
+创建真实验证单前，在项目根目录创建 `tmp/open-api-test` 文件夹，将 `infra/scripts/open-api-request.example.json` 复制为 `tmp/open-api-test/request.json`。替换所有占位内容和 null 数值，填写真实客户收件地址、箱重尺寸与货品资料；可选字段不使用时删除，不要提交模板虚构数据。`supplier` 是实际生产供应商连接编号。API Key 决定扣款客户，不能通过 JSON 指定其他客户。
+
+```sh
+node infra/scripts/test-open-api.mjs --create --file tmp/open-api-test/request.json --idempotency-key ups-validation-001 --wait --download
+```
+
+创建前必须在终端输入 `CREATE` 确认真实预扣与打单，然后隐藏输入密钥。该请求不是试算，也不会自动取消或退款。FedEx 与 UPS 分别使用对应供应商编号；每个有意创建的新订单使用不同幂等键。网络中断时禁止换新键重发：先核查后台，必要时用相同客户、原请求体、原幂等键恢复。
+
+脚本每次只发送一次创建请求，最多每 5 秒查询一次、约 10 分钟停止；失败、未知、超时待核查或取消均停止。查询网络失败也停止，可以再次查询相同订单号。`--download` 在 READY 时逐张下载并验证 PDF 文件头；未就绪不保存伪 PDF。UPS 本地 PDF 处理失败时脚本保留诊断并退出，不重新创建。
+
+结果保存到 `tmp/open-api-test/时间戳-随机编号/`：创建前保存 `request.json`、`request-meta.json`（含幂等键，不含密钥），创建成功保存 `accepted.json`，查询保存最新 `status.json`，面单为 `label-001.pdf` 等。此目录已被 Git 忽略，但仍包含个人信息，应妥善保管和清理。不要覆盖首次成功请求的资料后再使用原幂等键。
+
+本地模拟测试（不调用任何生产接口）：
+
+```sh
+node --test infra/scripts/test-open-api.test.mjs
+```
+
+## 在线页面
 
 部署后，技术人员可无需登录访问 `https://{host}/api/open/v1/docs`。该页面提供接口概览、可复制的请求示例、字段规则、错误格式和当前供应商能力边界；调试时可额外访问 `https://{host}/api/docs` 的 Swagger 页面。
 

@@ -1,0 +1,37 @@
+{
+  "shipment": {
+    "client_reference": "__REPLACE_REFERENCE__",
+    "supplier": "__REPLACE_SUPPLIER_CODE__",
+    "parcel_count": 1,
+    "taxwith": 0,
+    "deliverywith": "",
+    "exportwith": 0,
+    "importwith": 0,
+    "attrs": [],
+    "declaration_currency": "EUR",
+    "to_address": {
+      "name": "__REPLACE_RECIPIENT__",
+      "tel": "__REPLACE_PHONE__",
+      "city": "__REPLACE_CITY__",
+      "country": "__REPLACE_COUNTRY__",
+      "postcode": "__REPLACE_POSTCODE__",
+      "address_1": "__REPLACE_ADDRESS__"
+    },
+    "parcels": [{
+      "client_weight": null,
+      "client_length": null,
+      "client_width": null,
+      "client_height": null,
+      "declarations": [{
+        "name_cn": "__REPLACE_CHINESE_NAME__",
+        "name_en": "__REPLACE_ENGLISH_NAME__",
+        "material": "__REPLACE_MATERIAL__",
+        "origin_country": "__REPLACE_ORIGIN__",
+        "hs_code": "__REPLACE_HS_CODE__",
+        "weight": null,
+        "quantity": null,
+        "unit_price": null
+      }]
+    }]
+  }
+}
