@@ -41,11 +41,14 @@ test('idempotent order re-submit does not debit again; unsupported field/address
   const sandbox = orderHarness(); sandbox.resolved.supplier.environment = 'SANDBOX'; await assert.rejects(sandbox.svc.createForCustomer('customer1', sandbox.input), /无可用路由/); await sandbox.svc.createForAdmin('customer1', sandbox.input);
 });
 test('UPS country routes require exact configured profile, enabled service, unique route, EU destinations and fixed code 11', async () => {
-  const order = upsOrder(); const supplier: any = { ...order.service.supplier, carrier: {}, services: [], countryRoutes: [{ id: 'route1', serviceId: 's1', carrierServiceType: '11', customsMode: 'NONE', fieldConfig: {}, countries: [{ countryCode: 'NL' }], service: { id: 's1', enabled: true, supplierId: 'supplier1' } }] };
+  const order = upsOrder(); const supplier: any = { ...order.service.supplier, carrier: {}, services: [], countryRoutes: [{ id: 'route1', serviceId: 's1', carrierServiceType: '11', customsMode: 'NONE', fieldConfig: {}, countries: [{ countryCode: 'NL' }], service: { id: 's1', code: 'UPS_STANDARD', name: 'UPS Standard', enabled: true, supplierId: 'supplier1', currency: 'EUR', measurementMethod: 'PER_BOX', allowsMultiPiece: true, minPieces: 1 } }] };
   const config = new UpsOfficialConfig({} as any); (config as any).profiles = () => ({ UPS1: profile });
-  const db: any = { country: { findFirst: async () => ({ code: 'NL' }) }, supplier: { findFirst: async () => supplier } };
+  const db: any = { country: { findFirst: async () => ({ code: 'NL' }) }, service: { findFirst: async ({ where }: any) => where.id === 's1' ? ({ id: 's1', code: 'UPS_STANDARD', supplierId: 'supplier1' }) : null }, supplier: { findFirst: async () => supplier } };
   const products = new ProductsService(db, {} as any, config);
   assert.equal((await products.resolveOrderRoute('supplier1', '荷兰', true)).route.carrierServiceType, '11');
+  assert.equal((await products.resolvePublicServiceRoute('s1', '荷兰')).service.code, 'UPS_STANDARD');
+  await assert.rejects(products.resolvePublicServiceRoute('missing', '荷兰'), /服务不存在/);
+  supplier.countryRoutes[0].service.id = 'other'; await assert.rejects(products.resolvePublicServiceRoute('s1', '荷兰'), (error: any) => /UPS_STANDARD.*NL/.test(error.message) && !error.message.includes(supplier.name)); supplier.countryRoutes[0].service.id = 's1';
   assert.equal((await products.resolveOrderRoute('supplier1', '荷兰', true)).shipperCountryCode, 'NL');
   (config as any).profiles = () => ({ UPS1: { ...profile, shipper: { ...profile.shipper, countryCode: 'BE', postalCode: '1740', city: 'TERNAT', stateCode: '' } } });
   assert.equal((await products.resolveOrderRoute('supplier1', '荷兰', true)).shipperCountryCode, 'BE');
@@ -66,12 +69,12 @@ test('durable queue claim prevents duplicate carrier creation, including redeliv
 test('Open API leaves long addresses for driver-specific splitting and downloads only owner box labels', async () => {
   let created: any; let owned = true;
   const labels = [{ id: 'label1', box: { boxNo: 'BOX1' }, trackingNumber: 'tracking1', content: Buffer.from('%PDF'), contentType: 'application/pdf', sourceContent: null }, { id: 'label2', box: { boxNo: 'BOX2' }, trackingNumber: 'tracking2', content: Buffer.from('%PDF'), contentType: 'application/pdf', sourceContent: null }];
-  const db: any = { supplier: { findUnique: async () => ({ id: 'supplier1' }) }, openApiIdempotencyRecord: { findUnique: async () => null, create: async () => ({}) }, order: { findUniqueOrThrow: async () => ({ orderNo: 'ORD-1', clientReference: null }), findFirst: async ({ where }: any) => { assert.equal(where.customerId, 'customer1'); return owned ? { orderNo: 'ORD-1', carrierTrackingNumber: 'tracking1', shipmentStatus: 'GENERATED', labels, dispatchJob: null } : null; } }, $transaction: async () => {} };
-  const orders: any = { createForCustomer: async (_c: string, input: any) => { created = input; return { id: 'order1' }; }, dispatchSummary: () => ({ status: 'READY' }) };
+  const db: any = { service: { findFirst: async () => ({ id: 'service1', supplierId: 'supplier1' }) }, openApiIdempotencyRecord: { findUnique: async () => null, create: async () => ({}) }, order: { findUniqueOrThrow: async () => ({ orderNo: 'ORD-1', clientReference: null }), findFirst: async ({ where }: any) => { assert.equal(where.customerId, 'customer1'); return owned ? { orderNo: 'ORD-1', carrierTrackingNumber: 'tracking1', shipmentStatus: 'GENERATED', labels, dispatchJob: null } : null; } }, $transaction: async () => {} };
+  let createOptions: any; const orders: any = { createForCustomer: async (_c: string, input: any, options: any) => { created = input; createOptions = options; return { id: 'order1' }; }, dispatchSummary: () => ({ status: 'READY' }) };
   const open = new OpenApiShipmentsService(db, orders, { resolveDestinationCountry: async () => 'NL' } as any, { ensure: async (label: any) => label } as any);
   const customer: any = { customerId: 'customer1' };
-  await open.create(customer, 'external-key', { shipment: { supplier: 'UPS1', parcel_count: 1, declaration_currency: 'EUR', to_address: { name: 'Recipient', city: 'Amsterdam', country: '荷兰', postcode: '1012JS', tel: '+31201234567', address_1: 'ABCDEFGHIJKLMNOPQRSTUVW', address_2: ' 12' }, parcels: [{ client_weight: 1, client_length: 20, client_width: 10, client_height: 10, declarations: [{ name_en: 'Phone case' }] }] } } as any);
-  assert.equal(created.recipientAddress, 'ABCDEFGHIJKLMNOPQRSTUVW 12'); assert.equal(created.supplierId, 'supplier1');
+  await open.create(customer, 'external-key', { shipment: { service: 'UPS_STANDARD', parcel_count: 1, declaration_currency: 'EUR', to_address: { name: 'Recipient', city: 'Amsterdam', country: '荷兰', postcode: '1012JS', tel: '+31201234567', address_1: 'ABCDEFGHIJKLMNOPQRSTUVW', address_2: ' 12' }, parcels: [{ client_weight: 1, client_length: 20, client_width: 10, client_height: 10, declarations: [{ name_en: 'Phone case' }] }] } } as any);
+  assert.equal(created.recipientAddress, 'ABCDEFGHIJKLMNOPQRSTUVW 12'); assert.equal(created.supplierId, 'supplier1'); assert.equal(createOptions.requestedServiceId, 'service1');
   const result = await open.label(customer, 'ORD-1'); assert.equal(result.shipment.labels[1].box_no, 'BOX2');
   await assert.rejects(open.labelFile(customer, 'ORD-1'), /多个面单/); assert.equal((await open.labelFile(customer, 'ORD-1', 'label2')).id, 'label2');
   owned = false; await assert.rejects(open.labelFile(customer, 'ORD-1', 'label1'), /无权访问/);

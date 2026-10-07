@@ -10,12 +10,12 @@ test('default is read-only; credentials cannot be CLI arguments or remote plain 
   assert.throws(() => parseArgs(['--base', 'https://user:pass@example.com']));
 });
 test('unfilled production templates cannot be submitted', () => {
-  assert.throws(() => validateInput({ shipment: { supplier: '__REPLACE_SUPPLIER_CODE__' } }));
-  assert.throws(() => validateInput({ shipment: { supplier: 'UPS', to_address: {}, parcel_count: 1, parcels: [{ client_weight: null }] } }));
+  assert.throws(() => validateInput({ shipment: { service: '__REPLACE_SERVICE_CODE__' } }));
+  assert.throws(() => validateInput({ shipment: { service: 'UPS_STANDARD', to_address: {}, parcel_count: 1, parcels: [{ client_weight: null }] } }));
 });
 test('creation sends correct key and idempotency headers without following redirects', async () => {
   let calls = 0;
-  const body = { shipment: { supplier: 'EXAMPLE' } };
+  const body = { shipment: { service: 'EXAMPLE' } };
   const client = makeClient('https://example.com', 'private-key', async (url, options) => {
     calls++;
     assert.equal(url, 'https://example.com/api/open/v1/shipments');

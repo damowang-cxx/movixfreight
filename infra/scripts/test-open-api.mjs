@@ -26,7 +26,7 @@ export function parseArgs(args) {
 export function validateInput(body) {
   if (/__REPLACE_[A-Z_]+__/.test(JSON.stringify(body))) throw new Error('请先替换请求模板中的全部 __REPLACE_...__ 占位内容');
   const s = body?.shipment;
-  if (!s?.supplier || s.service || !s.to_address || !Array.isArray(s.parcels) || !s.parcels.length || s.parcel_count !== s.parcels.length) throw new Error('需要 shipment.supplier、to_address 及与 parcel_count 相符的 parcels；不能使用旧 service 字段');
+  if (!s?.service || s.supplier || !s.to_address || !Array.isArray(s.parcels) || !s.parcels.length || s.parcel_count !== s.parcels.length) throw new Error('需要 shipment.service、to_address 及与 parcel_count 相符的 parcels；不能传入内部 supplier 字段');
   for (const p of s.parcels) {
     for (const name of ['client_weight', 'client_length', 'client_width', 'client_height']) {
       if (typeof p[name] !== 'number' || !Number.isFinite(p[name]) || p[name] <= 0) throw new Error(`箱子 ${name} 必须是实际的正数`);
@@ -118,7 +118,7 @@ async function main() {
     if (!o.file || !o['idempotency-key']?.trim() || o['idempotency-key'].length > 256) throw new Error('创建必须指定 --file 和 --idempotency-key（1–256 字符）；重试必须保持原键与原请求体');
     body = JSON.parse((await readFile(resolve(o.file), 'utf8')).replace(/^\uFEFF/, ''));
     validateInput(body);
-    console.log(`站点：${o.base}\n供应商：${body.shipment.supplier}\n目的国：${body.shipment.to_address.country}\n箱数：${body.shipment.parcel_count}\n幂等键：${o['idempotency-key']}\n警告：可能真实扣费并创建运单，不是试算。请确认 JSON 中的实际收件地址、重量与申报信息。`);
+    console.log(`站点：${o.base}\n服务：${body.shipment.service}\n目的国：${body.shipment.to_address.country}\n箱数：${body.shipment.parcel_count}\n幂等键：${o['idempotency-key']}\n警告：可能真实扣费并创建运单，不是试算。请确认 JSON 中的实际收件地址、重量与申报信息。`);
     if (!process.stdin.isTTY) throw new Error('创建操作必须在交互终端确认；不支持无人值守创建');
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     let answer;

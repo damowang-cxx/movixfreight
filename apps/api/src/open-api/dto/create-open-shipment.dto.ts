@@ -47,7 +47,8 @@ export class OpenParcelDto {
 
 export class OpenShipmentDto {
   @IsOptional() @IsString() client_reference?: string;
-  @IsString() supplier!: string;
+  /** Public service code. Supplier connections are an internal implementation detail. */
+  @IsString() service!: string;
   @Type(() => Number) @IsInt() @Min(1) parcel_count!: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(4) taxwith?: number;
   @IsOptional() @IsString() tax_number?: string;

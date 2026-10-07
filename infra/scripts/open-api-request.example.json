@@ -1,7 +1,7 @@
 {
   "shipment": {
     "client_reference": "__REPLACE_REFERENCE__",
-    "supplier": "__REPLACE_SUPPLIER_CODE__",
+    "service": "__REPLACE_SERVICE_CODE__",
     "parcel_count": 1,
     "taxwith": 0,
     "deliverywith": "",

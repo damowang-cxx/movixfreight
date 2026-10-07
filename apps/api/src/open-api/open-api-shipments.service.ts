@@ -27,12 +27,19 @@ export class OpenApiShipmentsService {
     }
 
     const normalized = await this.normalizeShipment(input.shipment);
-    const supplier = await this.prisma.supplier.findUnique({ where: { code: normalized.supplierCode }, select: { id: true } });
-    if (!supplier) throw new NotFoundException('供应商不存在或编号无效');
+    const service = await this.prisma.service.findFirst({
+      where: {
+        code: { equals: normalized.serviceCode, mode: 'insensitive' },
+        enabled: true,
+        supplier: { enabled: true, environment: 'PRODUCTION', carrier: { enabled: true } },
+      },
+      select: { id: true, supplierId: true },
+    });
+    if (!service) throw new NotFoundException('服务不存在、已停用或当前不可下单');
 
     const order = await this.orders.createForCustomer(customer.customerId, {
       idempotencyKey: `open-${customer.customerId}-${keyHash}`,
-      supplierId: supplier.id,
+      supplierId: service.supplierId,
       recipientName: normalized.toAddress.name!,
       recipientCompany: normalized.toAddress.company,
       recipientPhone: normalized.toAddress.mobile ?? normalized.toAddress.tel,
@@ -52,7 +59,7 @@ export class OpenApiShipmentsService {
       fromAddress: normalized.fromAddress,
       toAddress: normalized.toAddress,
       boxes: normalized.boxes,
-    }, { openRequest: { idempotencyKeyHash: keyHash, requestHash } });
+    }, { requestedServiceId: service.id, openRequest: { idempotencyKeyHash: keyHash, requestHash } });
 
     const accepted = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { dispatchJob: true } });
     return this.accepted(accepted);
@@ -109,7 +116,7 @@ export class OpenApiShipmentsService {
     const suppliedNumbers = boxes.map((box) => box.boxNo).filter((boxNo): boxNo is string => Boolean(boxNo)); if (new Set(suppliedNumbers).size !== suppliedNumbers.length) throw new BadRequestException('已填写的箱号不可重复');
     const taxWith = shipment.taxwith ?? 0; const taxNumber = shipment.tax_number?.trim() || undefined;
     if ((taxWith === 3 || taxWith === 4) && !taxNumber) throw new BadRequestException('taxwith 为 3 或 4 时必须填写 tax_number');
-    return { supplierCode: shipment.supplier.trim().toUpperCase(), clientReference: shipment.client_reference?.trim() || undefined, taxWith, taxNumber, deliveryWith: shipment.deliverywith ?? '', exportWith: shipment.exportwith ?? 0, importWith: shipment.importwith ?? 0, attrs: [...new Set(shipment.attrs ?? [])], toAddress, fromAddress, recipientAddress, recipientState: toAddress.state_code || toAddress.state || undefined, destinationCountryCode, boxes, estimatedChargeableKg: boxes.reduce((sum, box) => sum + Number(box.weightKg), 0).toFixed(3) };
+    return { serviceCode: shipment.service.trim(), clientReference: shipment.client_reference?.trim() || undefined, taxWith, taxNumber, deliveryWith: shipment.deliverywith ?? '', exportWith: shipment.exportwith ?? 0, importWith: shipment.importwith ?? 0, attrs: [...new Set(shipment.attrs ?? [])], toAddress, fromAddress, recipientAddress, recipientState: toAddress.state_code || toAddress.state || undefined, destinationCountryCode, boxes, estimatedChargeableKg: boxes.reduce((sum, box) => sum + Number(box.weightKg), 0).toFixed(3) };
   }
 
   private cleanAddress(address: OpenAddressDto) { return Object.fromEntries(Object.entries(address).filter(([, value]) => value !== undefined).map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value])) as Record<string, any>; }

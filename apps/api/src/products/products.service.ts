@@ -125,6 +125,20 @@ export class ProductsService {
     if (supplier.driverCode === 'UPS_OFFICIAL' && (!UPS_EU_COUNTRIES.includes(countryCode) || route.carrierServiceType !== '11' || route.customsMode !== 'NONE' || (route.fieldConfig as any)?.shipmentOptions?.length)) throw new ConflictException('UPS 路由仅支持已配置欧盟目的国 Standard、无清关及无特殊物品选项');
     return { destinationCountryCode: countryCode, shipperCountryCode: upsProfile?.shipper.countryCode, accountFingerprint: upsProfile ? this.upsConfig.accountFingerprint(upsProfile) : undefined, supplier: { id: supplier.id, code: supplier.code, name: supplier.name, environment: supplier.environment, driverCode: supplier.driverCode, carrier: supplier.carrier }, route: { id: route.id, code: route.code, name: route.name, routeType: route.routeType, carrierServiceType: route.carrierServiceType, countryCodes: route.countries.map((item) => item.countryCode), fieldSchema: routeFieldSchema(supplier.driverCode, route.customsMode, route.fieldConfig as Record<string, unknown>, route.routeType) }, service: { id: route.service.id, code: route.service.code, name: route.service.name, currency: route.service.currency, measurementMethod: route.service.measurementMethod, allowsMultiPiece: route.service.allowsMultiPiece, minPieces: route.service.minPieces } };
   }
+  /** Resolve an externally selected service without exposing its supplier connection. */
+  async resolvePublicServiceRoute(serviceId: string, countryInput: string) {
+    const service = await this.prisma.service.findFirst({ where: { id: serviceId, enabled: true, supplier: { enabled: true, environment: ChannelEnvironment.PRODUCTION, carrier: { enabled: true } } }, select: { id: true, code: true, supplierId: true } });
+    if (!service) throw new NotFoundException('服务不存在、已停用或当前不可下单');
+    const countryCode = await this.resolveCountryCode(countryInput);
+    try {
+      const resolved = await this.resolveOrderRoute(service.supplierId, countryCode, false);
+      if (resolved.service.id !== service.id) throw new ConflictException('国家路由未绑定当前服务');
+      return resolved;
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new ConflictException(`服务 ${service.code} 暂不支持 ${countryCode} 或当前线路未就绪`);
+    }
+  }
   private async saveSupplierRoute(supplierId: string, data: { code: string; name: string; routeType: string; serviceId?: string; carrierServiceType?: string; countryCodes: string[]; customsMode?: string; fieldConfig?: Record<string, unknown>; enabled?: boolean }, routeId?: string) {
     const supplier = await this.prisma.supplier.findUnique({ where: { id: supplierId }, select: { id: true, driverCode: true } }); if (!supplier) throw new NotFoundException('供应商连接不存在');
     const enabledServices = await this.prisma.service.findMany({ where: { supplierId, enabled: true }, select: { id: true, code: true, name: true } });

@@ -82,7 +82,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
           <div class="endpoint"><div class="endpoint-title"><span class="method">POST</span><code>/shipments</code></div><div class="endpoint-body"><p>请求根字段固定为 <code>shipment</code>。成功响应 HTTP <code>202</code>，其中 <code>shipment_id</code> 是系统订单号。</p><div class="code-wrap"><button type="button" data-copy="request-code">复制示例</button><pre id="request-code">{
   "shipment": {
     "client_reference": "ERP-20260824-001",
-    "supplier": "FEDEX_RELAY_PRODUCTION_01",
+    "service": "YOUR_SERVICE_CODE",
     "parcel_count": 1,
     "taxwith": 0,
     "tax_number": null,
@@ -138,7 +138,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
         <section id="ups">
           <h2>UPS 官方接口：荷兰/比利时发货、欧盟 Standard</h2>
           <div class="notice">生产环境请求会创建真实运单并预扣账户余额。下方为字段格式说明，不要使用虚构地址进行生产试单。真实收寄件人及箱货数据必须由管理员确认。</div>
-          <p>填写管理员提供的 <code>shipment.supplier</code>（例如 UPS_OFFICIAL_PRODUCTION_01）和目的国家。发件国由供应商本地配置的 <code>shipper.countryCode</code> 决定，支持 NL、BE；比利时发件人省州可留空。只允许普通客户使用生产供应商；目的国必须在该供应商启用的 Standard 国家路由内。成本、利润、燃油与邮编报价全部使用系统报价，不调用 UPS Rating。</p>
+          <p>填写管理员向客户公开的 <code>shipment.service</code> 服务代码和目的国家。系统内部反查承载该服务的生产连接、发件国与 Standard 国家路由，对外不暴露供应商连接编号。目的国必须在该服务的可用路由内。成本、利润、燃油与邮编报价全部使用系统报价，不调用 UPS Rating。</p>
           <table><thead><tr><th>字段/阶段</th><th>UPS 规则</th></tr></thead><tbody>
           <tr><td>to_address</td><td>姓名/公司最多 35 字符、城市最多 30 字符、邮编最多 9 字符；电话规范为 6–15 位数字。地址合并后按完整单词切成最多三行，每行 35 字符。爱尔兰需要省/州代码。</td></tr>
           <tr><td>parcels</td><td>1–200 箱（仍受服务件数限制）；每箱最大 70 kg，最长边 274 cm，长加围长不超过 400 cm。重量为 kg、尺寸为 cm，自备普通包装。</td></tr>
@@ -166,7 +166,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
         <section id="rules">
           <h2>字段规则</h2>
           <table><thead><tr><th>字段</th><th>规则</th></tr></thead><tbody>
-            <tr><td>supplier</td><td>必填。供应商连接编号，例如 <code>FEDEX_RELAY_PRODUCTION_01</code>。系统会按目的国家匹配该供应商已启用的国家路由；FedEx 荷兰与泛欧订单共用该连接唯一的统一计价服务，调用方不需要也不能指定底层 serviceType；不接受 <code>service</code> 作为下单依据。</td></tr>
+            <tr><td>service</td><td>必填。客户可见的服务代码。系统会由服务内部反查生产连接，并按目的国家匹配国家路由和底层 serviceType。调用方不能传入 <code>supplier</code>、供应商连接编号或底层承运商 serviceType。</td></tr>
             <tr><td>to_address</td><td>必填。<code>name</code>、<code>city</code>、<code>country</code>、<code>postcode</code>、至少一个地址字段，以及 <code>tel</code>/<code>mobile</code> 至少一个必填。<code>address_1/2/3</code> 会合并后重新分配为最多三段，FedEx 每段最多 20 个 Unicode 字符；UPS 每段最多 35 个字符。不会拆分完整单词。</td></tr>
             <tr><td>country</td><td>支持启用国家表中的中文名、ISO 两位代码及既有英文名称，系统统一映射 ISO 两位代码。</td></tr>
             <tr><td>state / state_code</td><td>同时提供时优先使用 <code>state_code</code>。UPS 爱尔兰线路必填省/州代码（最多 5 字符），其他当前线路可选。</td></tr>

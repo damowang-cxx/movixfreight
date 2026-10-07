@@ -4,6 +4,47 @@
 
 ## 本地接口验收脚本
 
+### Windows Python 脚本（调用线上系统）
+
+`infra/scripts/test_open_api.py` 在本地 Windows PowerShell/CMD 运行，默认访问 `https://movixfreight.com`。需要 Python 3.10+，仅用标准库，无需安装 requests、Node.js 或启动本地后端/Docker，也不需要更新服务器。订单、预扣和面单生成在服务器执行，下载的 PDF 存在本机。
+
+以下命令在项目根目录运行。若没有 `py` 命令，将其替换为 `python`。
+
+先查询同一客户名下已存在的系统订单（不是 FedEx/UPS 转单号），确认 API Key 与下载可用：
+
+```powershell
+py -3 infra/scripts/test_open_api.py --shipment ORD-实际订单号 --wait --download
+```
+
+准备创建请求（此命令只复制模板，不访问接口；已有文件不会被覆盖）：
+
+```powershell
+py -3 infra/scripts/test_open_api.py --init
+notepad tmp/open-api-test/request.json
+```
+
+编辑模板：`service` 填客户可见的线上服务代码，填真实收件人、电话、国家、地址、箱重尺寸与申报数据；替换全部 `__REPLACE_...__` 占位符和 null 数值。不使用的可选字段可删除。请勿向客户提供后台供应商连接编号。FedEx 泛欧净重、原产国、HS 编码等要求仍由线上规则强制校验，UPS 英文描述等限制见下文。
+
+提交一票真实订单并等待逐箱 PDF：
+
+```powershell
+py -3 infra/scripts/test_open_api.py --create --file tmp/open-api-test/request.json --idempotency-key ups-python-validation-001 --wait --download
+```
+
+先输入 `CREATE` 确认真实预扣和打单，再在隐藏提示中粘贴**线上客户 API Key**（不要加 Bearer，也不是 UPS/FedEx 凭据）。也支持 `MOVIX_API_KEY` 环境变量，但不接受命令行密钥。FedEx 和 UPS 分别使用对客户公开的实际服务代码，并为不同订单选不同幂等键。不要把此前在聊天等渠道公开的密钥硬编码到脚本，建议先轮换。
+
+每次运行保存到项目 `tmp/open-api-test/python-时间戳-随机编号/`。创建前保留原请求与幂等键，成功后保存订单号和最新状态，失败时保存安全错误信息；不保存密钥。结果文件含客户个人信息，虽然已忽略 Git，仍须自行保护。创建 POST 只发送一次，查询每 5 秒一次，最多约 10 分钟；失败、未知或异常状态停止，不自动重试下单、取消或退款。下载检查 `%PDF-` 文件头，并按 `label_id` 下载所有箱子的面单。
+
+断网或超时可能发生在服务器已受理之后：先在后台核查，保留原请求和原幂等键，不要换新键下单。已获得 `ORD-…` 时使用上面的查询命令继续查看，不能再次创建。Windows 脚本本地运行**不代表供应商 Sandbox**，所选线上供应商是生产环境就会产生真实运单。
+
+离线模拟测试（不访问服务器）：
+
+```powershell
+py -3 infra/scripts/test_open_api_test.py
+```
+
+### Node.js 脚本（保留）
+
 仓库提供 `infra/scripts/test-open-api.mjs`（Node.js 20+，无需额外依赖，Windows/Linux 均可运行）。默认连接 `https://movixfreight.com`，可用 `--base https://实际域名` 修改。每次运行隐藏输入客户 API Key，也可读取 `MOVIX_API_KEY` 环境变量；不要将密钥写进脚本、JSON 或命令行历史。
 
 先用同一客户名下的现有系统订单号验证鉴权与下载，不产生新订单：
@@ -12,13 +53,13 @@
 node infra/scripts/test-open-api.mjs --shipment ORD-实际系统订单号 --wait --download
 ```
 
-创建真实验证单前，在项目根目录创建 `tmp/open-api-test` 文件夹，将 `infra/scripts/open-api-request.example.json` 复制为 `tmp/open-api-test/request.json`。替换所有占位内容和 null 数值，填写真实客户收件地址、箱重尺寸与货品资料；可选字段不使用时删除，不要提交模板虚构数据。`supplier` 是实际生产供应商连接编号。API Key 决定扣款客户，不能通过 JSON 指定其他客户。
+创建真实验证单前，在项目根目录创建 `tmp/open-api-test` 文件夹，将 `infra/scripts/open-api-request.example.json` 复制为 `tmp/open-api-test/request.json`。替换所有占位内容和 null 数值，填写真实客户收件地址、箱重尺寸与货品资料；可选字段不使用时删除，不要提交模板虚构数据。`service` 是客户可见的服务代码。API Key 决定扣款客户，不能通过 JSON 指定其他客户。
 
 ```sh
 node infra/scripts/test-open-api.mjs --create --file tmp/open-api-test/request.json --idempotency-key ups-validation-001 --wait --download
 ```
 
-创建前必须在终端输入 `CREATE` 确认真实预扣与打单，然后隐藏输入密钥。该请求不是试算，也不会自动取消或退款。FedEx 与 UPS 分别使用对应供应商编号；每个有意创建的新订单使用不同幂等键。网络中断时禁止换新键重发：先核查后台，必要时用相同客户、原请求体、原幂等键恢复。
+创建前必须在终端输入 `CREATE` 确认真实预扣与打单，然后隐藏输入密钥。该请求不是试算，也不会自动取消或退款。FedEx 与 UPS 分别使用对应服务代码；每个有意创建的新订单使用不同幂等键。网络中断时禁止换新键重发：先核查后台，必要时用相同客户、原请求体、原幂等键恢复。
 
 脚本每次只发送一次创建请求，最多每 5 秒查询一次、约 10 分钟停止；失败、未知、超时待核查或取消均停止。查询网络失败也停止，可以再次查询相同订单号。`--download` 在 READY 时逐张下载并验证 PDF 文件头；未就绪不保存伪 PDF。UPS 本地 PDF 处理失败时脚本保留诊断并退出，不重新创建。
 
@@ -51,7 +92,7 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。创
 
 `POST /shipments`
 
-请求体根字段为 `shipment`。必填业务字段：`supplier`、`parcel_count`、`to_address`、`parcels`、`declaration_currency`。`supplier` 是供应商连接编号，而非内部服务代码；系统会按目的国家匹配该供应商启用的国家路由。对于 FedEx Relay，荷兰和泛欧路由自动共用该供应商唯一的统一计价服务，调用方无需也不能指定底层 serviceType。目的国家可使用已启用国家表中的中文名、ISO 两位代码或既有英文名称，系统会转换为 ISO 两位代码。旧 `service` 字段不再作为下单依据。
+请求体根字段为 `shipment`。必填业务字段：`service`、`parcel_count`、`to_address`、`parcels`、`declaration_currency`。`service` 是客户可见的服务代码；系统内部反查生产供应商连接，并按目的国家匹配该服务的国家路由和底层 serviceType。调用方不能传入 `supplier`或底层承运商 serviceType。目的国家可使用已启用国家表中的中文名、ISO 两位代码或既有英文名称，系统会转换为 ISO 两位代码。
 
 `to_address` 必须提供姓名、城市、国家、邮编、至少一个地址字段（`address_1`、`address_2`、`address_3`），并至少提供电话或手机。三段地址会按单个空格合并后重新分配为最多三段地址；FedEx 每段最多 20 个 Unicode 字符，UPS 每段最多 35 个字符，系统绝不拆分完整单词。单个单词超过所选驱动的行字符上限或总地址无法容纳时会明确拒绝请求。
 
@@ -95,7 +136,7 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。创
 
 ## UPS_OFFICIAL（2026-09-16）
 
-- 通过 `shipment.supplier` 指定管理员给出的 UPS 供应商编号。发件人为配置文件中的荷兰或比利时地址；仅开放已启用 Standard 国家路由的荷兰及欧盟目的国，不接受特殊清关区域。
+- 通过 `shipment.service` 指定管理员向客户公开的 UPS 服务代码。发件人、UPS 账号和供应商连接均由系统内部解析，不向客户公开；仅开放已启用 Standard 国家路由的荷兰及欧盟目的国，不接受特殊清关区域。
 - 官方 Shipping 版本 v2409；UPS Standard 固定服务 11、普通自备包装、运费由公司 UPS 账号支付。客户不填写底层 serviceType。
 - UPS 创建前校验地址、配置、路由、尺寸和英文品名。英文品名必填，每箱多个品名以逗号空格合并最多 35 个可打印英文字符；其他申报项按全局配置校验。
 - 件数 1–200，仍受服务设置约束。单箱最大 70 kg，最长边 274 cm，长加围长最多 400 cm。地址最多三行，每行 35 字符；城市最多 30 字符、邮编 9 字符、收件人/公司 35 字符、电话规范为 6–15 位数字。

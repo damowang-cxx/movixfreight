@@ -11,3 +11,4 @@ coverage/
 apps/api/prisma/dev.db
 /tmp/*.dump
 /tmp/open-api-test/
+/infra/scripts/__pycache__/

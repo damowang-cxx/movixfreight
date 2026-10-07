@@ -21,7 +21,7 @@ export type ImportOrderRow = { rowNo: number; customerId: string; order: Omit<Cr
 export class OrdersService {
   constructor(private readonly prisma: PrismaService, private readonly pricing: PricingService, private readonly balanceAlerts: BalanceAlertsService, private readonly settings: SettingsService, private readonly products: ProductsService, private readonly dispatchQueue?: ShipmentDispatchQueueService, private readonly upsLabels?: UpsLabelService) {}
 
-  async createForCustomer(customerId: string, input: CreateOrderInput, options: { allowSandbox?: boolean; openRequest?: { idempotencyKeyHash: string; requestHash: string } } = {}) {
+  async createForCustomer(customerId: string, input: CreateOrderInput, options: { allowSandbox?: boolean; requestedServiceId?: string; openRequest?: { idempotencyKeyHash: string; requestHash: string } } = {}) {
     if (!input.boxes.length) throw new BadRequestException('至少需要一个箱号');
     const existing = await this.prisma.order.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
     if (existing) {
@@ -31,7 +31,9 @@ export class OrdersService {
     }
     const orderNo = this.number('ORD');
     const normalizedInput = { ...input, recipientCountryCode: await this.pricing.resolveDestinationCountry(input.recipientCountryCode), recipientState: input.recipientState?.trim() || undefined, boxes: this.normalizeBoxNumbers(input.boxes, orderNo) };
-    const resolved = await this.products.resolveOrderRoute(input.supplierId, normalizedInput.recipientCountryCode, Boolean(options.allowSandbox));
+    const resolved = options.requestedServiceId
+      ? await this.products.resolvePublicServiceRoute(options.requestedServiceId, normalizedInput.recipientCountryCode)
+      : await this.products.resolveOrderRoute(input.supplierId, normalizedInput.recipientCountryCode, Boolean(options.allowSandbox));
     const recipientAddress = normalizeRecipientAddress(input.recipientAddress === undefined ? [input.recipientAddressLine1, input.recipientAddressLine2, input.recipientAddressLine3] : [input.recipientAddress], resolved.supplier.driverCode);
     if (resolved.supplier.driverCode === 'UPS_OFFICIAL') assertUpsInput(normalizedInput);
     const service = resolved.service;
