@@ -12,9 +12,10 @@ import { BillingModule } from './billing/billing.module';
 import { BalanceAlertsModule } from './balance-alerts/balance-alerts.module';
 import { SettingsModule } from './settings/settings.module';
 import { OpenApiModule } from './open-api/open-api.module';
+import { TrackingModule } from './tracking/tracking.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), DatabaseModule, AuthModule, ConnectorsModule, BalanceAlertsModule, SettingsModule, CustomersModule, ProductsModule, PricingModule, OrdersModule, BillingModule, OpenApiModule],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), DatabaseModule, AuthModule, ConnectorsModule, BalanceAlertsModule, SettingsModule, CustomersModule, ProductsModule, PricingModule, OrdersModule, BillingModule, TrackingModule, OpenApiModule],
   controllers: [HealthController],
 })
 export class AppModule {}

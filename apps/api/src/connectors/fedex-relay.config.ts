@@ -33,7 +33,9 @@ export class FedexRelayConfig {
     const root = this.root;
     const profileFound = !profileKey || Boolean(root.profiles?.[profileKey]);
     if (requireExactProfile && !profileFound) return { configured: false, enabled: false, environment: 'production' as const, shipperComplete: false, accountConfigured: false, profileFound };
-    const values = this.connection(profileKey);
+    // A strict profile check must not inherit root-level Sandbox credentials.
+    // Tracking uses this mode to stay on the original order's connection.
+    const values = requireExactProfile && profileKey ? root.profiles?.[profileKey] ?? {} : this.connection(profileKey);
     const shipperComplete = Boolean(values.shipper?.name && values.shipper.company && values.shipper.phone && values.shipper.streetLines?.length && values.shipper.city && values.shipper.postalCode && values.shipper.countryCode);
     return { configured: Boolean(values.enabled && values.baseUrl && values.shipApiKey && values.fedexAccountNumber && values.authHeaderName && shipperComplete), enabled: values.enabled ?? false, environment: values.environment ?? 'sandbox', shipperComplete, accountConfigured: Boolean(values.fedexAccountNumber), profileFound };
   }

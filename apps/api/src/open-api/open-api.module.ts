@@ -5,6 +5,7 @@ import { OpenApiKeyGuard } from './open-api-auth.guard';
 import { OpenApiShipmentsController } from './open-api-shipments.controller';
 import { OpenApiShipmentsService } from './open-api-shipments.service';
 import { OpenApiDocsController } from './open-api-docs.controller';
+import { TrackingModule } from '../tracking/tracking.module';
 
-@Module({ imports: [OrdersModule, PricingModule], controllers: [OpenApiShipmentsController, OpenApiDocsController], providers: [OpenApiKeyGuard, OpenApiShipmentsService] })
+@Module({ imports: [OrdersModule, PricingModule, TrackingModule], controllers: [OpenApiShipmentsController, OpenApiDocsController], providers: [OpenApiKeyGuard, OpenApiShipmentsService] })
 export class OpenApiModule {}

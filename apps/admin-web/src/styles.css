@@ -43,6 +43,14 @@ body { margin: 0; min-width: 1180px; }
 .order-list-panel { padding: 24px; }
 .order-list-panel > h2.ant-typography { margin-bottom: 2px; font-size: 22px; }
 .order-list-panel > .ant-typography { margin-bottom: 10px; font-size: 12px; }
+.tracking-list-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.tracking-list-cell small { color: #718293; font-size: 11px; white-space: nowrap; }
+.tracking-package { width: 100%; padding: 12px 14px; border: 1px solid #d9e6ed; border-radius: 8px; background: #f8fbfc; }
+.tracking-events { margin: 12px 0 0 8px; padding-left: 15px; border-left: 2px solid #8bb6c8; }
+.tracking-event { position: relative; display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 12px; padding: 0 0 15px; font-size: 12px; }
+.tracking-event::before { position: absolute; left: -21px; top: 5px; width: 10px; height: 10px; border: 2px solid #397f9a; border-radius: 50%; background: white; content: ''; }
+.tracking-event time, .tracking-event small { color: #64798a; }
+.tracking-event small { display: block; margin-top: 2px; }
 .order-list-panel .order-filter { margin: 10px 0 14px; padding: 10px; }
 .order-list-panel .order-filter .ant-input, .order-list-panel .order-filter .ant-select-selector, .order-list-panel .order-filter .ant-btn { font-size: 12px; }
 .order-list-panel .order-filter .ant-input, .order-list-panel .order-filter .ant-select-single { min-height: 30px; }

@@ -11,6 +11,7 @@ import { supportsAutomaticShipment, getConnectorDriver } from '../connectors/con
 import { assertUpsInput } from '../connectors/ups-official.mapper';
 import { UpsLabelService } from './ups-label.service';
 import { ProductsService } from '../products/products.service';
+import { TrackingService } from '../tracking/tracking.service';
 
 export type ItemInput = { chineseName?: string; englishName?: string; material?: string; originCountryCode?: string; harmonizedCode?: string; quantity?: number; unitDeclaredValue?: string; declaredValueCurrency?: 'EUR' | 'GBP'; sku?: string; itemWeightKg?: string; itemLengthCm?: string; itemWidthCm?: string; itemHeightCm?: string };
 export type BoxInput = { boxNo?: string; reference?: string; weightKg: string; lengthCm: string; widthCm: string; heightCm: string; items: ItemInput[] };
@@ -19,7 +20,7 @@ export type ImportOrderRow = { rowNo: number; customerId: string; order: Omit<Cr
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService, private readonly pricing: PricingService, private readonly balanceAlerts: BalanceAlertsService, private readonly settings: SettingsService, private readonly products: ProductsService, private readonly dispatchQueue?: ShipmentDispatchQueueService, private readonly upsLabels?: UpsLabelService) {}
+  constructor(private readonly prisma: PrismaService, private readonly pricing: PricingService, private readonly balanceAlerts: BalanceAlertsService, private readonly settings: SettingsService, private readonly products: ProductsService, private readonly dispatchQueue?: ShipmentDispatchQueueService, private readonly upsLabels?: UpsLabelService, private readonly tracking?: TrackingService) {}
 
   async createForCustomer(customerId: string, input: CreateOrderInput, options: { allowSandbox?: boolean; requestedServiceId?: string; openRequest?: { idempotencyKeyHash: string; requestHash: string } } = {}) {
     if (!input.boxes.length) throw new BadRequestException('至少需要一个箱号');
@@ -91,7 +92,8 @@ export class OrdersService {
 
   async listForCustomer(customerId: string) {
     const orders = await this.prisma.order.findMany({ where: { customerId }, include: { service: { select: { code: true, name: true } }, feeLines: true, labels: { select: { id: true, trackingNumber: true, contentType: true, box: { select: { boxNo: true } }, createdAt: true } }, dispatchJob: true }, orderBy: { createdAt: 'desc' } });
-    return orders.map((order) => ({ ...order, dispatch: this.dispatchSummary(order, false), dispatchJob: undefined }));
+    const summaries = await this.tracking?.listSummaries(orders.map(order => order.id), false);
+    return orders.map((order) => ({ ...order, dispatch: this.dispatchSummary(order, false), tracking: summaries?.get(order.id) ?? { status: 'PENDING', syncStatus: 'PENDING', lastSyncedAt: null }, dispatchJob: undefined }));
   }
   createForAdmin(customerId: string, input: CreateOrderInput) { return this.createForCustomer(customerId, input, { allowSandbox: true }); }
   async quoteForCustomer(customerId: string, input: CreateOrderInput, allowSandbox = false) {
@@ -151,7 +153,8 @@ export class OrdersService {
   }
   async listForAdmin() {
     const orders = await this.prisma.order.findMany({ include: { customer: { select: { id: true, customerNo: true, username: true } }, service: { select: { id: true, code: true, name: true, carrierServiceType: true, supplier: { select: { driverCode: true, environment: true, carrier: { select: { name: true } } } } } }, labels: { select: { id: true, trackingNumber: true, contentType: true, box: { select: { boxNo: true } }, createdAt: true } }, dispatchJob: true }, orderBy: { createdAt: 'desc' } });
-    return orders.map((order) => ({ ...order, connectorCapabilities: getConnectorDriver(order.service.supplier.driverCode)?.capabilities, dispatch: this.dispatchSummary(order, true) }));
+    const summaries = await this.tracking?.listSummaries(orders.map(order => order.id), true);
+    return orders.map((order) => ({ ...order, connectorCapabilities: getConnectorDriver(order.service.supplier.driverCode)?.capabilities, dispatch: this.dispatchSummary(order, true), tracking: summaries?.get(order.id) ?? { status: 'PENDING', syncStatus: 'PENDING', lastSyncedAt: null } }));
   }
   async getForAdmin(orderId: string) {
     const order = await this.prisma.order.findUnique({

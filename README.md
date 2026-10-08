@@ -83,6 +83,7 @@ pnpm build
 - [当前开发进度、可测试功能与规划](./docs/current-development-report.md)
 - [完整设计与里程碑计划](./docs/system-design/11-overall-development-plan.md)
 - [UPS 官方接入、后台配置与首次升级步骤](./docs/system-design/13-ups-official-integration.md)
+- [FedEx / UPS 轨迹同步与首次升级步骤](./docs/system-design/14-shipment-tracking.md)
 - [FedEx 中转站接入说明](./docs/system-design/12-fedex-relay-integration.md)
 - [生产部署与 FedEx Production 上线](./docs/production-deployment.md)
 - [Ubuntu 24.04 已验证部署方案](./docs/ubuntu-24.04-verified-deployment.md)

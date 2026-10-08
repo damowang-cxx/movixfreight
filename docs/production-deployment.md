@@ -289,3 +289,7 @@ sudo nginx -t && sudo systemctl reload nginx
 ## 2026-09-16：UPS 官方驱动增量升级
 
 本次增加 `migrate-ups-official-labels.sql`，首次不能只运行自动更新脚本。先备份、等待面单任务结束、执行可审阅增量迁移，再重建 API、Worker 和两个前端。详见 [UPS 官方接入与服务器升级](./system-design/13-ups-official-integration.md#7-服务器升级首次含数据库变更)。UPS profile 合并到原配置的 `upsOfficial.profiles`，不覆盖 FedEx。生产实单请求有真实业务后果，必须使用管理员指定数据。
+
+## 2026-10-08：FedEx / UPS 轨迹同步升级
+
+本次新增 `migrate-shipment-tracking.sql`。`update-production.sh` 会因 Prisma 目录变更停止；必须先备份、审核 SQL 并手动迁移，再更新 API、Worker 和双前端。详细命令和生产实单验收见 [轨迹同步与上线说明](./system-design/14-shipment-tracking.md)。新 Worker 首次启动会对最近 90 天有面单的订单调用承运商 Track API，但不会创建新面单或改动余额。

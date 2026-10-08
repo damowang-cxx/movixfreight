@@ -4,7 +4,7 @@ import { FedexRelayConfig } from './fedex-relay.config';
 export type FedexRelayPayload = Record<string, unknown>;
 export type FedexLabel = { trackingNumber?: string; contentType: string; encodedLabel: string };
 
-/** direct.ship-api.com/fedex 的已确认接口：OAuth、Rate、Validate、Create、Cancel。 */
+/** Ship-API Direct 代理的 FedEx OAuth、Ship、Rate 和 Track 接口。 */
 @Injectable()
 export class FedexRelayConnector {
   private static readonly REQUEST_TIMEOUT_MS = 30_000;
@@ -21,6 +21,12 @@ export class FedexRelayConnector {
   async rate(token: string, payload: FedexRelayPayload, profileKey?: string) { return this.post('/rate/v1/rates/quotes', token, payload, profileKey); }
   async validate(token: string, payload: FedexRelayPayload, profileKey?: string) { return this.post('/ship/v1/shipments/packages/validate', token, payload, profileKey); }
   async createShipment(token: string, payload: FedexRelayPayload, profileKey?: string) { return this.post('/ship/v1/shipments', token, payload, profileKey); }
+  async track(token: string, trackingNumbers: string[], profileKey?: string) {
+    return this.post('/track/v1/trackingnumbers', token, {
+      includeDetailedScans: true,
+      trackingInfo: trackingNumbers.map(trackingNumber => ({ trackingNumberInfo: { trackingNumber } })),
+    }, profileKey);
+  }
   /**
    * FedEx Ship API 的取消接口。取消只针对尚未交运/收货的运单；国际多件 Express
    * 以主运单号配合 DELETE_ALL_PACKAGES 取消整票，避免只删除其中一个包裹。

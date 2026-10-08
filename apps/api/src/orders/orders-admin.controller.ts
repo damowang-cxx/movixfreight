@@ -10,6 +10,7 @@ import { ShipmentOperationsService } from './shipment-operations.service';
 import { FedexValidationService } from './fedex-validation.service';
 import { OrdersService } from './orders.service';
 import { LabelPdfService } from './label-pdf.service';
+import { TrackingService } from '../tracking/tracking.service';
 
 class AdminItemDto { @IsOptional() @IsString() chineseName?: string; @IsOptional() @IsString() englishName?: string; @IsOptional() @IsString() material?: string; @IsOptional() @IsString() originCountryCode?: string; @IsOptional() @IsString() harmonizedCode?: string; @IsOptional() @IsString() sku?: string; @IsOptional() @Transform(({ value }) => value === '' ? undefined : value) @Matches(/^\d+(\.\d{1,3})?$/) itemWeightKg?: string; @IsOptional() @Transform(({ value }) => value === '' ? undefined : value) @Matches(/^\d+(\.\d{1,2})?$/) itemLengthCm?: string; @IsOptional() @Transform(({ value }) => value === '' ? undefined : value) @Matches(/^\d+(\.\d{1,2})?$/) itemWidthCm?: string; @IsOptional() @Transform(({ value }) => value === '' ? undefined : value) @Matches(/^\d+(\.\d{1,2})?$/) itemHeightCm?: string; @IsOptional() @Transform(({ value }) => value === '' ? undefined : value) @IsInt() @Min(1) quantity?: number; @IsOptional() @Transform(({ value }) => value === '' ? undefined : value) @Matches(/^\d+(\.\d{1,2})?$/) unitDeclaredValue?: string; @IsOptional() @Transform(({ value }) => value === '' ? undefined : value) @IsEnum(['EUR', 'GBP'] as const) declaredValueCurrency?: 'EUR' | 'GBP'; }
 class AdminBoxDto { @IsOptional() @Transform(({ value }) => typeof value === 'string' && !value.trim() ? undefined : value) @IsString() boxNo?: string; @Matches(/^\d+(\.\d{1,3})?$/) weightKg!: string; @Matches(/^\d+(\.\d{1,2})?$/) lengthCm!: string; @Matches(/^\d+(\.\d{1,2})?$/) widthCm!: string; @Matches(/^\d+(\.\d{1,2})?$/) heightCm!: string; @IsArray() @ValidateNested({ each: true }) @Type(() => AdminItemDto) items!: AdminItemDto[]; }
@@ -22,13 +23,15 @@ class ImportOrdersDto { @IsString() sourceFileName!: string; @IsArray() @Validat
 @RequireAdminRoles(AdminRole.SUPER_ADMIN, AdminRole.OPERATIONS)
 @Controller('admin/v1/orders')
 export class OrdersAdminController {
-  constructor(private readonly fedex: FedexValidationService, private readonly orders: OrdersService, private readonly labelPdf: LabelPdfService, private readonly operations: ShipmentOperationsService) {}
+  constructor(private readonly fedex: FedexValidationService, private readonly orders: OrdersService, private readonly labelPdf: LabelPdfService, private readonly operations: ShipmentOperationsService, private readonly tracking: TrackingService) {}
   @Get()
   list() { return this.orders.listForAdmin(); }
   @Get('orderable-suppliers') orderableSuppliers() { return this.orders.orderableSuppliers(true); }
   @Get('route') route(@Query('supplierId') supplierId = '', @Query('country') country = '') { return this.orders.resolveOrderRoute(supplierId, country, true); }
   @Get('dispatch-status')
   dispatchStatus(@Query('ids') ids = '') { return this.orders.dispatchStatusesForAdmin(ids.split(',')); }
+  @Get('tracking-status')
+  trackingStatus(@Query('ids') ids = '') { return this.tracking.statuses(ids); }
   @Post()
   create(@Body() input: CreateAdminOrderDto) { const { customerId, ...order } = input; return this.orders.createForAdmin(customerId, order); }
   @Post('quote')

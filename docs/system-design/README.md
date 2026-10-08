@@ -35,6 +35,8 @@
 | [10-pricing-management.md](./10-pricing-management.md) | 成本表、利润表、附加费、版本和优先级 |
 | [11-overall-development-plan.md](./11-overall-development-plan.md) | 原始总体设计、技术选型与里程碑计划 |
 | [12-fedex-relay-integration.md](./12-fedex-relay-integration.md) | 当前 FedEx Ship-API Direct 中转配置与对接边界 |
+| [13-ups-official-integration.md](./13-ups-official-integration.md) | UPS 官方驱动与升级步骤 |
+| [14-shipment-tracking.md](./14-shipment-tracking.md) | FedEx / UPS 轨迹同步、数据边界与首次升级 |
 | [decisions.md](./decisions.md) | 已确认业务决策记录 |
 | [open-questions.md](./open-questions.md) | 仍需用户确认的业务问题 |
 
@@ -46,7 +48,7 @@
 | EUR/GBP 钱包、预扣与对账 | 已确认 | 预警/通知、标准化账单录入与会计确认已实现；账单文件上传待补齐 |
 | 双前端与管理员多标签 | 已确认 | 管理员与客户核心运营页面已接入；统计、注册和部分配置编辑待补齐 |
 | 报价与成本 | 已确认 | 重量、体积、材积重、燃油、偏远费与版本已实现；超重、客户分层与报价快照待补齐 |
-| FedEx 中转 | 已确认 | OAuth、Rate、Validate、Create 已封装；取消/查询/轨迹待文档 |
+| FedEx 中转与 UPS 轨迹 | 已确认 | 创建、取消及只读轨迹同步已接入；生产轨迹仍需实单核对 |
 | 风控、统计与生产化 | 后续阶段 | 未实现 |
 
 ## 维护规则

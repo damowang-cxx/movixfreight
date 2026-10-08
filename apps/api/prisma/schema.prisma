@@ -693,6 +693,7 @@ model Order {
   dispatchJob             ShipmentDispatchJob?
   priceRecalculations     OrderPriceRecalculation[]
   cancellationRefund      CancellationRefundCase?
+  trackingRecords         ShipmentTracking[]
 
   @@index([isTest, createdAt])
   @@index([supplierRouteId])
@@ -745,8 +746,55 @@ model OrderBox {
   finalChargeableWeightKg Decimal? @db.Decimal(12, 3)
   order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   items      OrderItemDeclaration[]
+  trackingRecords ShipmentTracking[]
 
   @@unique([orderId, boxNo])
+}
+
+model ShipmentTracking {
+  id                  String   @id @default(cuid())
+  orderId             String
+  boxId               String?
+  trackingNumber      String
+  driverCode          String
+  status              String   @default("LABEL_CREATED")
+  carrierStatusCode   String?
+  carrierDescription  String?
+  syncStatus          String   @default("PENDING")
+  publicMessage       String?
+  technicalError      String?
+  lastSyncedAt        DateTime?
+  nextSyncAt          DateTime?
+  claimedAt           DateTime?
+  refreshRequestedAt  DateTime?
+  failureCount        Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  order               Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  box                 OrderBox? @relation(fields: [boxId], references: [id], onDelete: SetNull)
+  events              ShipmentTrackingEvent[]
+
+  @@unique([orderId, trackingNumber])
+  @@index([nextSyncAt, syncStatus])
+  @@index([orderId])
+}
+
+model ShipmentTrackingEvent {
+  id                  String   @id @default(cuid())
+  trackingId          String
+  eventKey            String
+  occurredAt          DateTime
+  status              String
+  carrierStatusCode   String?
+  description         String
+  city                String?
+  state               String?
+  countryCode         String?
+  createdAt           DateTime @default(now())
+  tracking            ShipmentTracking @relation(fields: [trackingId], references: [id], onDelete: Cascade)
+
+  @@unique([trackingId, eventKey])
+  @@index([trackingId, occurredAt])
 }
 
 model OrderItemDeclaration {

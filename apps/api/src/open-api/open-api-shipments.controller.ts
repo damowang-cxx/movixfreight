@@ -8,6 +8,7 @@ import { OpenApiExceptionFilter } from './open-api-exception.filter';
 import { OpenApiShipmentsService } from './open-api-shipments.service';
 import { CreateOpenShipmentDto } from './dto/create-open-shipment.dto';
 import { LabelPdfService } from '../orders/label-pdf.service';
+import { TrackingService } from '../tracking/tracking.service';
 
 @ApiTags('Open API v1')
 @ApiHeader({ name: 'X-API-Key', required: true, description: '客户 API Key' })
@@ -16,7 +17,7 @@ import { LabelPdfService } from '../orders/label-pdf.service';
 @UseFilters(OpenApiExceptionFilter)
 @Controller('open/v1/shipments')
 export class OpenApiShipmentsController {
-  constructor(private readonly shipments: OpenApiShipmentsService, private readonly labelPdf: LabelPdfService) {}
+  constructor(private readonly shipments: OpenApiShipmentsService, private readonly labelPdf: LabelPdfService, private readonly tracking: TrackingService) {}
 
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
@@ -30,6 +31,12 @@ export class OpenApiShipmentsController {
   async label(@CurrentOpenApiCustomer() customer: OpenApiPrincipal, @Param('shipmentId') shipmentId: string) {
     const data = await this.shipments.label(customer, shipmentId);
     return { status: 1, info: null, time: Date.now(), data };
+  }
+
+  @Get(':shipmentId/tracking')
+  async trackingDetail(@CurrentOpenApiCustomer() customer: OpenApiPrincipal, @Param('shipmentId') shipmentId: string) {
+    const data = await this.tracking.detail(shipmentId, customer.customerId, true);
+    return { status: 1, info: null, time: Date.now(), data: { shipment: data } };
   }
 
   @Get(':shipmentId/label/download')

@@ -73,7 +73,7 @@ node --test infra/scripts/test-open-api.test.mjs
 
 ## 在线页面
 
-部署后，技术人员可无需登录访问 `https://{host}/api/open/v1/docs`。该页面提供接口概览、可复制的请求示例、字段规则、错误格式和当前供应商能力边界；调试时可额外访问 `https://{host}/api/docs` 的 Swagger 页面。
+部署后，技术人员可无需登录访问 `https://{host}/api/open/v1/docs`。该页面提供完整请求字段表、可复制的请求/响应示例、异步轮询步骤、轨迹、错误格式和当前供应商能力边界。内部 `/api/docs` Swagger 包含非公开管理端接口，**不作为对外接入合同，也不应公开给第三方**。
 
 ## 鉴权与幂等
 
@@ -82,7 +82,7 @@ X-API-Key: mvx_...
 Idempotency-Key: 客户侧唯一请求键
 ```
 
-API Key 由管理员在客户详情创建或轮换；明文只显示一次。创建运单必须提供 `Idempotency-Key`。同一客户以相同键、相同请求体重试不会重复预扣；相同键对应不同请求体返回 `409`。
+API Key 由管理员在客户详情创建或轮换；明文只显示一次。应仅保存于接入方服务端，不能放在浏览器、URL 或日志。创建运单必须提供 1–256 字符的 `Idempotency-Key`；每笔有意创建的新订单使用新键。同一客户以相同键、相同请求体重试不会重复预扣；相同键对应不同请求体返回 `409`。重试成功响应仍为受理格式，当前进度需查询标签接口。
 
 所有 JSON 响应含 `status`（1 成功、0 失败）与 Unix 毫秒 `time`。失败响应的 `info.code` 和 `info.message` 可供程序处理和人工排查。
 
@@ -97,6 +97,25 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。创
 `to_address` 必须提供姓名、城市、国家、邮编、至少一个地址字段（`address_1`、`address_2`、`address_3`），并至少提供电话或手机。三段地址会按单个空格合并后重新分配为最多三段地址；FedEx 每段最多 20 个 Unicode 字符，UPS 每段最多 35 个字符，系统绝不拆分完整单词。单个单词超过所选驱动的行字符上限或总地址无法容纳时会明确拒绝请求。
 
 `parcels` 中的 `number` 为可选；留空后，系统在创建订单时生成 `ORD-…-001` 形式的箱号。`client_weight`、`client_length`、`client_width`、`client_height` 必填，且 `parcel_count` 必须等于数组长度。
+
+创建请求使用 `Content-Type: application/json`。公开接口仅允许启用的**生产**服务：会真实预扣并可能创建承运商运单；目前不向客户 ERP 提供公开 Sandbox 建单端点。创建请求没有单独的“预估收费重”字段，系统根据箱体重量/尺寸及服务规则计算预扣；独立公开试算端点尚未开放。
+
+### 建单字段速查
+
+| 结构 | 字段 | 必填/约束 |
+| --- | --- | --- |
+| `shipment` | `service`, `parcel_count`, `declaration_currency`, `to_address`, `parcels` | 必填；服务代码由管理员提供，箱数须等于 `parcels.length`，申报币种为 EUR 或 GBP。运费扣款币种由服务决定。 |
+| `shipment` | `client_reference` | 可选且可重复；不替代系统订单号或幂等键。 |
+| `shipment` | `taxwith`, `tax_number`, `deliverywith`, `exportwith`, `importwith`, `attrs` | 结构分别支持 0–4、字符串、空/ddu/ddp、0–7、0–2、枚举数组；当前 FedEx/UPS 线路仅接受默认值及空税号、空 attrs。 |
+| `to_address` | `name`, `city`, `country`, `postcode`, `address_1/2/3` | 名称、城市、国家、邮编必填，至少一个地址段非空。国家为启用国家表中的中文名、ISO 两字代码或已支持英文名。 |
+| `to_address` | `tel`, `mobile` | 至少一个；同时有值时优先使用 `mobile`。 |
+| `to_address` | `company`, `state`, `state_code`, `email`, `ext` | 可选；省州代码优先于名称。`ext` 保存在订单中，不向承运商透传。 |
+| `from_address` | Address 对象 | 可选，仅作为订单资料保存；不能覆盖供应商预设的发件人。 |
+| `parcels[]` | `client_weight`, `client_length`, `client_width`, `client_height`, `declarations` | 必填；重量 kg、尺寸 cm，数值均大于 0；每箱至少一条申报明细。 |
+| `parcels[]` | `number`, `reference` | 可选；空箱号由系统生成，非空箱号不可重复；`reference` 是箱子参考号。 |
+| `declarations[]` | `name_cn`, `name_en`, `weight`, `length`, `width`, `height`, `sku`, `material`, `origin_country`, `hs_code`, `quantity`, `unit_price` | 字段可省略性受全局申报设置与线路要求共同决定；FedEx 泛欧强制英文名、商品净重、原产国、HS、数量和单价；UPS 强制可打印英文描述。`quantity` 为正整数，填写的净重和单价须大于 0。 |
+
+完整 JSON 示例及线路字段差异请以在线页面的“创建运单”“完整字段表”“线路规则”章节为准。未知 JSON 字段会被拒绝。
 
 ### FedEx 国家路由
 
@@ -115,20 +134,70 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。创
 
 返回 `PENDING`、`READY`、`FAILED` 或 `UNKNOWN`，并返回可直接展示的 `label_status_message`。`dispatch.status` 进一步区分 `PENDING`（等待队列）、`VALIDATING`、`CREATING`、`READY`、`FAILED`、`UNKNOWN`、`STALLED`（超过 10 分钟待核查）和 `BLOCKED`（当前驱动不支持自动打单）；`dispatch.message` 为安全业务提示，`reasonCode` 便于程序处理。`READY` 时包含 `transfer_number`、每张面单的 `label_id` 与下载地址。`UNKNOWN` 不会自动重试，避免供应商重复创建面单。
 
+响应外层为 `{ "status": 1, "info": null, "time": 1780000000000, "data": { "shipment": { ... } } }`。`data.shipment` 中包括 `shipment_id`、`client_reference`、`label_status`、`label_status_message`、`dispatch`、`transfer_number`、`label_count`、`labels[]`、`label_download_url`、`failure_reason`。`labels[]` 的 `tracking_number` 是该箱承运商单号，不一定等于整票 `transfer_number`。取消订单后 `dispatch.status=CANCELLED`，但 `label_status` 可能仍为 PENDING；调用方须以 dispatch 终态停止轮询。
+
 ### 下载标签
 
 `GET /shipments/:shipmentId/label/download?label_id=...`
 
 标签就绪后返回 PDF 附件。单箱订单可省略 `label_id`；多箱订单必须使用状态接口返回的具体 `label_id`。
 
+成功下载为二进制响应（`Content-Type: application/pdf`，`Content-Disposition: attachment`），不要按 JSON 解析；未就绪或下载失败则返回统一 JSON 错误。UPS 若已创建运单但本地 PDF 转换失败，`dispatch.reasonCode=LABEL_PROCESSING_FAILED`，可使用原 `label_id` 再次下载触发仅限本地的 PDF 修复；不要创建新订单。
+
+### 查询物流轨迹
+
+`GET /shipments/:shipmentId/tracking`
+
+使用 `X-API-Key` 和系统订单号 `ORD-…`，无需 `Idempotency-Key`。只返回该 API Key 所属客户的订单；其他客户的订单统一返回 404。接口读取后台保存的 FedEx / UPS 轨迹，不会因客户频繁查询而再次请求承运商。建议每 10–15 分钟查询一次。
+
+```json
+{
+  "status": 1,
+  "info": null,
+  "time": 1780000000000,
+  "data": {
+    "shipment": {
+      "shipment_id": "ORD-...",
+      "transfer_number": "1Z...",
+      "status": "IN_TRANSIT",
+      "sync_status": "READY",
+      "last_synced_at": "2026-10-08T08:00:00.000Z",
+      "message": null,
+      "packages": [{
+        "box_no": "ORD-...-001",
+        "tracking_number": "1Z...",
+        "status": "IN_TRANSIT",
+        "carrier_status_code": "I",
+        "carrier_description": "On the Way",
+        "sync_status": "READY",
+        "last_synced_at": "2026-10-08T08:00:00.000Z",
+        "next_sync_at": "2026-10-08T09:00:00.000Z",
+        "message": null,
+        "events": [{
+          "occurred_at": "2026-10-08T07:30:00.000Z",
+          "status": "IN_TRANSIT",
+          "carrier_status_code": "I",
+          "description": "Arrived at Facility",
+          "city": "Brussels",
+          "state": null,
+          "country_code": "BE"
+        }]
+      }]
+    }
+  }
+}
+```
+
+`status` 是独立物流状态：`PENDING`、`LABEL_CREATED`、`IN_TRANSIT`、`OUT_FOR_DELIVERY`、`DELIVERED`、`EXCEPTION`、`RETURNING`、`RETURNED`、`UNKNOWN`、`CANCELLED`，不会自动修改订单或费用状态。`sync_status` 为 `PENDING`、`PROCESSING`、`READY`、`NO_EVENTS`、`ERROR`、`STOPPED`。还没有面单或承运商扫描记录时，`packages`/`events` 可能为空；同步失败会保留上次成功事件，并返回安全提示。时间字段为 UTC ISO 8601。UPS 多箱逐箱返回；旧 FedEx 面单可能没有箱号。
+
 ## 字段与当前限制
 
 - `attrs` 是数组，仅允许 `elec`、`magnetic`、`danger`、`liquid`、`powder`、`paste`、`sensitive_goods`、`wood`、`textile`；当前 FedEx 两条线路均不接受非空值。
-- `taxwith`、`deliverywith`、`exportwith`、`importwith` 和 `tax_number` 会完整保存；但当前 FedEx 两条线路均只能使用默认值，不能把通用字段误认为已下发到 FedEx。
+- `taxwith`、`deliverywith`、`exportwith`、`importwith` 当前只能使用默认值，`tax_number` 必须为空；非默认值会在建单前拒绝，而非仅保存。不能把 DTO 中存在的字段误认为已映射到承运商。
 - `from_address` 与地址 `ext` 完整保存，FedEx / UPS 均使用供应商连接中配置的固定发件人，不向承运商发送 from_address。
 - `to_address.state_code` 优先于 `to_address.state` 保存并下发至 FedEx；UPS 爱尔兰线路要求省/州代码（最多 5 字符）；其他当前线路可选。
 - 税务、交货、报关、清关及物品属性只在命中国家路由明确启用、且驱动已实现对应承运商映射时可提交；未启用的字段会明确拒绝，不会被静默忽略。
-- 配置了国家路由的 `FEDEX_RELAY`、`UPS_OFFICIAL` 供应商可自动生成面单。路由轨迹、运单信息、供应商列表、余额、独立运费试算、取消和 Webhook 尚未开放。
+- 配置了国家路由的 `FEDEX_RELAY`、`UPS_OFFICIAL` 供应商可自动生成面单并同步轨迹。完整运单信息、供应商列表、余额、独立运费试算、取消和 Webhook 尚未开放。
 
 ## 异步执行
 
@@ -163,5 +232,7 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。创
 
 ### 错误约定
 
-配置/环境未就绪：503；字段不支持：400；无路由/多路由等业务冲突：409 BUSINESS_CONFLICT；幂等冲突：409 IDEMPOTENCY_CONFLICT；余额或客户状态不允许：403 ORDER_CREATION_FORBIDDEN。供应商异步错误看 dispatch 的安全提示及 reasonCode；不会返回密钥、原始 GIF 或技术堆栈。
+失败响应固定为 `{ "status": 0, "info": { "code": "...", "message": "..." }, "time": 1780000000000, "data": null }`。当前常见分类：`400 INVALID_REQUEST`（字段）、`401 API_KEY_INVALID`（密钥）、`403 ORDER_CREATION_FORBIDDEN`（客户状态或余额不足）、`404 OPEN_API_ERROR`（服务/报价不存在或订单不归属本客户）、`409 IDEMPOTENCY_CONFLICT`（同键不同请求）、`409 BUSINESS_CONFLICT`（线路/报价或面单下载冲突）、`503 LABEL_PROCESSING_FAILED`（已创建 UPS 运单但本地 PDF 失败）。其他 500/503 一般为 `OPEN_API_ERROR`。不存在已实现的 `INSUFFICIENT_BALANCE` 专用 `info.code`；余额不足应结合 HTTP 403 和 `info.message` 处理。
+
+供应商异步错误不会改变原创建接口的 HTTP 202；应读取标签接口的 `dispatch.reasonCode`、`dispatch.message`。推荐未完成任务约每 5 秒轮询一次；READY 下载并停止；FAILED、UNKNOWN、BLOCKED、CANCELLED 停止并展示提示；STALLED（超过 10 分钟）停止密集查询并人工核查，不要换幂等键再次建单。客户轨迹接口建议每 10–15 分钟查询一次，不会同步调用承运商。
 UPS 发件国从供应商本地 profile 的 `shipper.countryCode` 读取，支持 `NL` 和 `BE`，不会使用调用方的 `from_address` 覆盖；比利时发件人 `stateCode` 可为空。新订单保存始发国快照，若排队期间修改始发国，将阻止错误出单。
