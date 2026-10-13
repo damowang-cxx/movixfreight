@@ -1,11 +1,14 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Currency, CustomerStatus, Prisma, WalletLedgerType } from '@prisma/client';
 import { hash } from 'bcryptjs';
-import { randomBytes, randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { WalletAdjustmentDto } from './dto/wallet-adjustment.dto';
 import { BalanceAlertsService } from '../balance-alerts/balance-alerts.service';
+const sharp: typeof import('sharp').default = require('sharp');
+
+export type RechargeImage = { buffer: Buffer; originalname: string; mimetype: string; size: number };
 
 @Injectable()
 export class CustomersService {
@@ -113,9 +116,31 @@ export class CustomersService {
     return customer;
   }
 
-  async adjustWallet(customerId: string, input: WalletAdjustmentDto, operatorId: string | undefined) {
+  private async validateRechargeImage(image: RechargeImage | undefined, direction: 'CREDIT' | 'DEBIT') {
+    if (direction === 'DEBIT') {
+      if (image) throw new BadRequestException('扣减余额不能附加充值水单；请使用入账方向');
+      return null;
+    }
+    if (!image) return null;
+    if (!image.buffer?.length || image.buffer.length > 5 * 1024 * 1024 || image.size !== image.buffer.length) throw new BadRequestException('水单图片必须为非空文件，且不超过 5 MB');
+    const bytes = image.buffer;
+    const detected = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'image/png'
+      : bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? 'image/jpeg'
+      : bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp' : null;
+    if (!detected || image.mimetype !== detected) throw new BadRequestException('水单仅支持真实的 PNG、JPG 或 WebP 图片');
+    try {
+      const metadata = await sharp(bytes, { limitInputPixels: 20_000_000 }).metadata();
+      if (!metadata.width || !metadata.height || metadata.width * metadata.height > 20_000_000) throw new Error('图片尺寸无效');
+      await sharp(bytes, { limitInputPixels: 20_000_000 }).stats();
+    } catch { throw new BadRequestException('水单图片无法完整读取，或像素尺寸超过限制'); }
+    const fileName = image.originalname.replace(/[\\/\x00-\x1f\x7f]/g, '').trim().slice(0, 180) || 'recharge-receipt';
+    return { fileName, mimeType: detected, byteSize: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), content: Uint8Array.from(bytes) };
+  }
+
+  async adjustWallet(customerId: string, input: WalletAdjustmentDto, operatorId: string | undefined, image?: RechargeImage) {
     const requestedAmount = new Prisma.Decimal(input.amount);
     if (requestedAmount.lessThanOrEqualTo(0)) throw new BadRequestException('调整金额必须大于 0');
+    const receipt = await this.validateRechargeImage(image, input.direction);
 
     return this.prisma.$transaction(async (tx) => {
       const customer = await tx.customer.findUnique({ where: { id: customerId }, include: { wallets: true } });
@@ -147,6 +172,7 @@ export class CustomersService {
           operatorId,
         },
       });
+      if (receipt) await tx.rechargeReceipt.create({ data: { ledgerId: ledger.id, ...receipt } });
 
       await this.balanceAlerts.evaluateInTransaction(tx, { customerId: customer.id, customerNo: customer.customerNo, username: customer.username, walletId: wallet.id, currency: wallet.currency, balance: after });
 
@@ -156,6 +182,34 @@ export class CustomersService {
       }
       return ledger;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  async rechargeHistory(customerId: string, includeOperator: boolean, cursor?: string) {
+    if (cursor) {
+      const ownedCursor = await this.prisma.walletLedger.findFirst({ where: { id: cursor, wallet: { customerId }, type: WalletLedgerType.ADMIN_CREDIT }, select: { id: true } });
+      if (!ownedCursor) throw new BadRequestException('充值历史翻页标识无效');
+    }
+    const entries = await this.prisma.walletLedger.findMany({
+      where: { wallet: { customerId }, type: WalletLedgerType.ADMIN_CREDIT },
+      select: { id: true, ledgerNo: true, amount: true, balanceBefore: true, balanceAfter: true, reason: true, operatorId: true, createdAt: true, wallet: { select: { currency: true } }, rechargeReceipt: { select: { id: true, fileName: true, mimeType: true, byteSize: true, sha256: true, createdAt: true } } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 51,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+    const page = entries.slice(0, 50);
+    const operatorIds = includeOperator ? [...new Set(page.map((entry) => entry.operatorId).filter((id): id is string => Boolean(id)))] : [];
+    const operators = operatorIds.length ? await this.prisma.adminUser.findMany({ where: { id: { in: operatorIds } }, select: { id: true, displayName: true, username: true } }) : [];
+    const operatorNames = new Map(operators.map((admin) => [admin.id, admin.displayName || admin.username]));
+    return {
+      items: page.map((entry) => ({ ledgerId: entry.id, ledgerNo: entry.ledgerNo, currency: entry.wallet.currency, amount: entry.amount, balanceBefore: entry.balanceBefore, balanceAfter: entry.balanceAfter, reason: entry.reason, createdAt: entry.createdAt, operatorName: includeOperator ? operatorNames.get(entry.operatorId ?? '') ?? '历史管理员' : undefined, receipt: entry.rechargeReceipt })),
+      nextCursor: entries.length > 50 ? page.at(-1)?.id ?? null : null,
+    };
+  }
+
+  async rechargeReceipt(customerId: string, ledgerId: string) {
+    const ledger = await this.prisma.walletLedger.findFirst({ where: { id: ledgerId, wallet: { customerId }, type: WalletLedgerType.ADMIN_CREDIT }, select: { rechargeReceipt: { select: { mimeType: true, content: true } } } });
+    if (!ledger?.rechargeReceipt) throw new NotFoundException('充值水单不存在或无权查看');
+    return ledger.rechargeReceipt;
   }
 
   private createNumber(prefix: string) {

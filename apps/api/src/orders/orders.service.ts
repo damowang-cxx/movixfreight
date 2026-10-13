@@ -17,6 +17,7 @@ export type ItemInput = { chineseName?: string; englishName?: string; material?:
 export type BoxInput = { boxNo?: string; reference?: string; weightKg: string; lengthCm: string; widthCm: string; heightCm: string; items: ItemInput[] };
 export type CreateOrderInput = { idempotencyKey: string; supplierId: string; recipientName: string; recipientCompany?: string; recipientPhone?: string; recipientCountryCode: string; recipientPostcode: string; recipientCity: string; recipientState?: string; recipientAddress?: string; recipientAddressLine1?: string; recipientAddressLine2?: string; recipientAddressLine3?: string; recipientResidential?: boolean; estimatedChargeableKg: string; boxes: BoxInput[]; clientReference?: string; taxWith?: number; taxNumber?: string; deliveryWith?: string; exportWith?: number; importWith?: number; shipmentAttrs?: string[]; fromAddress?: Record<string, unknown>; toAddress?: Record<string, unknown> };
 export type ImportOrderRow = { rowNo: number; customerId: string; order: Omit<CreateOrderInput, 'idempotencyKey'> };
+export type CustomerImportOrderRow = { rowNo: number; serviceCode: string; order: Omit<CreateOrderInput, 'idempotencyKey' | 'supplierId'> };
 
 @Injectable()
 export class OrdersService {
@@ -96,9 +97,11 @@ export class OrdersService {
     return orders.map((order) => ({ ...order, dispatch: this.dispatchSummary(order, false), tracking: summaries?.get(order.id) ?? { status: 'PENDING', syncStatus: 'PENDING', lastSyncedAt: null }, dispatchJob: undefined }));
   }
   createForAdmin(customerId: string, input: CreateOrderInput) { return this.createForCustomer(customerId, input, { allowSandbox: true }); }
-  async quoteForCustomer(customerId: string, input: CreateOrderInput, allowSandbox = false) {
+  async quoteForCustomer(customerId: string, input: CreateOrderInput, allowSandbox = false, requestedServiceId?: string) {
     const normalized = { ...input, recipientCountryCode: await this.pricing.resolveDestinationCountry(input.recipientCountryCode), boxes: this.normalizeBoxNumbers(input.boxes, 'QUOTE') };
-    const resolved = await this.products.resolveOrderRoute(input.supplierId, normalized.recipientCountryCode, allowSandbox);
+    const resolved = requestedServiceId
+      ? await this.products.resolvePublicServiceRoute(requestedServiceId, normalized.recipientCountryCode)
+      : await this.products.resolveOrderRoute(input.supplierId, normalized.recipientCountryCode, allowSandbox);
     normalizeRecipientAddress(input.recipientAddress === undefined ? [input.recipientAddressLine1, input.recipientAddressLine2, input.recipientAddressLine3] : [input.recipientAddress], resolved.supplier.driverCode);
     this.assertRouteOptions(normalized, resolved.route.fieldSchema);
     await this.assertShipmentInput(normalized, undefined, resolved.route.fieldSchema);
@@ -110,6 +113,57 @@ export class OrdersService {
   }
   orderableSuppliers(allowSandbox: boolean) { return this.products.orderableSuppliers(allowSandbox); }
   resolveOrderRoute(supplierId: string, countryCode: string, allowSandbox: boolean) { return this.products.resolveOrderRoute(supplierId, countryCode, allowSandbox); }
+  private async customerImportService(serviceCode: string, country: string) {
+    const service = await this.prisma.service.findUnique({ where: { code: serviceCode.trim() }, select: { id: true } });
+    if (!service) throw new NotFoundException(`服务代码 ${serviceCode} 不存在`);
+    return this.products.resolvePublicServiceRoute(service.id, country);
+  }
+  private customerImportKey(customerId: string, sourceFileName: string, row: CustomerImportOrderRow) {
+    return `excel-customer-${createHash('sha256').update(JSON.stringify({ customerId, sourceFileName, rowNo: row.rowNo, serviceCode: row.serviceCode, order: row.order })).digest('hex').slice(0, 48)}`;
+  }
+  async previewImportForCustomer(customerId: string, sourceFileName: string, rows: CustomerImportOrderRow[]) {
+    const customer = await this.prisma.customer.findUnique({ where: { id: customerId }, include: { wallets: true } });
+    if (!customer) throw new NotFoundException('客户不存在');
+    if (new Set<CustomerStatus>([CustomerStatus.FROZEN, CustomerStatus.REJECTED, CustomerStatus.PENDING_REVIEW, CustomerStatus.PENDING_RECHARGE_VERIFICATION]).has(customer.status)) throw new ForbiddenException('客户状态不可下单');
+    const totals = new Map<string, Prisma.Decimal>();
+    const results = [];
+    for (const row of rows) {
+      try {
+        const previous = await this.prisma.order.findUnique({ where: { idempotencyKey: this.customerImportKey(customerId, sourceFileName, row) } });
+        if (previous) {
+          if (previous.customerId !== customerId) throw new ConflictException('导入幂等键已被其他客户使用');
+          results.push({ rowNo: row.rowNo, status: 'ALREADY_CREATED' as const, orderNo: previous.orderNo, message: '该行此前已创建，不会再次扣费。' });
+          continue;
+        }
+        const resolved = await this.customerImportService(row.serviceCode, row.order.recipientCountryCode);
+        const quote = await this.quoteForCustomer(customerId, { ...row.order, supplierId: resolved.supplier.id, idempotencyKey: `preview-${row.rowNo}` }, false, resolved.service.id);
+        const wallet = customer.wallets.find((item) => item.currency === quote.currency);
+        const nextTotal = (totals.get(quote.currency) ?? new Prisma.Decimal(0)).add(quote.total);
+        if (!wallet || wallet.balance.lessThan(0) || wallet.balance.lessThan(nextTotal)) throw new ForbiddenException(`${quote.currency} 余额不足，无法覆盖本次导入的累计预扣`);
+        totals.set(quote.currency, nextTotal);
+        results.push({ rowNo: row.rowNo, status: 'READY' as const, currency: quote.currency, estimatedReceivable: quote.total });
+      } catch (error) { results.push({ rowNo: row.rowNo, status: 'ERROR' as const, error: error instanceof Error ? error.message : '预校验失败' }); }
+    }
+    return results;
+  }
+  async importForCustomer(customerId: string, sourceFileName: string, rows: CustomerImportOrderRow[]) {
+    const results = [];
+    for (const row of rows) {
+      try {
+        const idempotencyKey = this.customerImportKey(customerId, sourceFileName, row);
+        const existing = await this.prisma.order.findUnique({ where: { idempotencyKey } });
+        if (existing) {
+          if (existing.customerId !== customerId) throw new ConflictException('导入幂等键已被其他客户使用');
+          results.push({ rowNo: row.rowNo, status: 'CREATED' as const, orderId: existing.id, orderNo: existing.orderNo, labelStatus: 'PENDING' as const, message: '该行此前已创建，未再次预扣或生成面单。' });
+          continue;
+        }
+        const resolved = await this.customerImportService(row.serviceCode, row.order.recipientCountryCode);
+        const order = await this.createForCustomer(customerId, { ...row.order, supplierId: resolved.supplier.id, idempotencyKey }, { requestedServiceId: resolved.service.id });
+        results.push({ rowNo: row.rowNo, status: 'CREATED' as const, orderId: order.id, orderNo: order.orderNo, labelStatus: 'PENDING' as const, message: '下单成功，已完成预扣，正在自动校验并生成面单。' });
+      } catch (error) { results.push({ rowNo: row.rowNo, status: 'ERROR' as const, error: error instanceof Error ? error.message : '导入失败' }); }
+    }
+    return results;
+  }
   async previewImportForAdmin(rows: ImportOrderRow[]) {
     return Promise.all(rows.map(async (row) => {
       try {

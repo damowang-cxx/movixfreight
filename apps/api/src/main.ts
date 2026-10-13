@@ -1,11 +1,13 @@
 import 'reflect-metadata';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.useBodyParser('json', { limit: '2mb' });
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
   const configuredOrigins = (process.env.CORS_ORIGINS ?? 'http://localhost:3001,http://localhost:3002').split(',');
   const localIpv4Origins = process.env.NODE_ENV === 'production' ? [] : ['http://127.0.0.1:3001', 'http://127.0.0.1:3002'];

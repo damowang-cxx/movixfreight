@@ -10,13 +10,16 @@ import { OpenApiShipmentsService } from '../open-api/open-api-shipments.service'
 import { UpsOfficialConfig } from '../connectors/ups-official.config';
 import { profile, upsOrder } from '../../test/ups-fixtures';
 import { routeFieldSchema } from '../connectors/connector-drivers.registry';
+import { CustomerImportOrdersDto } from './customer-orders.controller';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 
 function orderHarness() {
   const wallet = { id: 'wallet1', currency: 'EUR', balance: new Prisma.Decimal(100) }; let saved: any; const ledgers: any[] = []; let enqueues = 0; let quotes = 0;
   const pricing: any = { resolveDestinationCountry: async (v: string) => v === '荷兰' ? 'NL' : v.toUpperCase(), quote: async () => { quotes++; return { total: '10', currency: 'EUR' }; } };
   const resolved: any = { shipperCountryCode: 'BE', accountFingerprint: 'hash', supplier: { id: 'supplier1', code: 'UPS1', driverCode: 'UPS_OFFICIAL', environment: 'PRODUCTION' }, service: { id: 'service1', code: 'UPS_STANDARD', minPieces: 1, allowsMultiPiece: true, measurementMethod: 'PER_BOX' }, route: { id: 'route1', code: 'STANDARD', routeType: 'DEFAULT', carrierServiceType: '11', fieldSchema: routeFieldSchema('UPS_OFFICIAL', 'NONE', {}) } };
-  const products: any = { resolveOrderRoute: async (_id: string, country: string, allowSandbox: boolean) => { if (country !== 'NL' || resolved.supplier.environment === 'SANDBOX' && !allowSandbox) throw new Error('无可用路由'); return resolved; } };
-  const db: any = { order: { findUnique: async () => saved ?? null, create: async ({ data }: any) => saved = { id: 'order1', ...data } }, customer: { findUnique: async () => ({ id: 'customer1', status: 'NORMAL', wallets: [wallet] }) }, customerWallet: { update: async ({ data }: any) => Object.assign(wallet, data) }, walletLedger: { create: async ({ data }: any) => ledgers.push(data) }, $transaction: async (cb: any, options: any) => { assert.equal(options.isolationLevel, 'Serializable'); return cb(db); } };
+  const products: any = { resolveOrderRoute: async (_id: string, country: string, allowSandbox: boolean) => { if (country !== 'NL' || resolved.supplier.environment === 'SANDBOX' && !allowSandbox) throw new Error('无可用路由'); return resolved; }, resolvePublicServiceRoute: async (_id: string, country: string) => { if (!['NL', '荷兰'].includes(country) || resolved.supplier.environment !== 'PRODUCTION') throw new Error('服务不可用'); return resolved; } };
+  const db: any = { order: { findUnique: async ({ where }: any) => saved?.idempotencyKey === where.idempotencyKey ? saved : null, create: async ({ data }: any) => saved = { id: 'order1', ...data } }, service: { findUnique: async ({ where }: any) => where.code === 'UPS_STANDARD' ? { id: 'service1' } : null }, customer: { findUnique: async () => ({ id: 'customer1', status: 'NORMAL', wallets: [wallet] }) }, customerWallet: { update: async ({ data }: any) => Object.assign(wallet, data) }, walletLedger: { create: async ({ data }: any) => ledgers.push(data) }, $transaction: async (cb: any, options: any) => { assert.equal(options.isolationLevel, 'Serializable'); return cb(db); } };
   const svc = new OrdersService(db, pricing, { evaluateInTransaction: async () => {} } as any, { requiredDeclarationFields: async () => [] } as any, products, { enqueue: async () => { enqueues++; } } as any);
   const o = upsOrder(); const input: any = { supplierId: 'supplier1', idempotencyKey: 'key1', recipientName: o.recipientName, recipientPhone: o.recipientPhone, recipientCountryCode: '荷兰', recipientCity: o.recipientCity, recipientPostcode: o.recipientPostcode, recipientAddress: 'ABCDEFGHIJKLMNOPQRSTUVW 12', estimatedChargeableKg: '2', boxes: o.boxes.map(({ id, ...box }) => ({ ...box, boxNo: undefined })) };
   return { svc, db, products, input, wallet, ledgers, resolved, saved: () => saved, counts: () => ({ enqueues, quotes }) };
@@ -33,6 +36,40 @@ test('admin, portal and Excel use same UPS preflight, normalized address, precha
     assert.equal(h.saved().supplierRouteSnapshot.packageOrder.length, 2); assert.ok(h.saved().boxes.create[0].boxNo.startsWith('ORD-'));
     assert.equal(h.counts().enqueues, 1);
   }
+});
+test('customer Excel import resolves public service code, previews cumulative balance and replays without recharging', async () => {
+  const h = orderHarness();
+  const { supplierId: _supplierId, idempotencyKey: _idempotencyKey, ...order } = h.input;
+  const row = { rowNo: 2, serviceCode: 'UPS_STANDARD', order };
+  const preview = await h.svc.previewImportForCustomer('customer1', 'orders.xlsx', [row]);
+  assert.equal(preview[0].status, 'READY', JSON.stringify(preview));
+  assert.equal(preview[0].estimatedReceivable, '10');
+  const first = await h.svc.importForCustomer('customer1', 'orders.xlsx', [row]);
+  const second = await h.svc.importForCustomer('customer1', 'orders.xlsx', [row]);
+  assert.equal(first[0].status, 'CREATED');
+  assert.equal(second[0].orderNo, first[0].orderNo);
+  assert.equal((await h.svc.previewImportForCustomer('customer1', 'orders.xlsx', [row]))[0].status, 'ALREADY_CREATED');
+  assert.equal(h.ledgers.length, 1);
+  assert.equal(h.counts().enqueues, 1);
+  assert.equal(h.saved().supplierRouteSnapshot.packageOrder.length, 2);
+  const low = orderHarness(); low.wallet.balance = new Prisma.Decimal(15);
+  const lowPreview = await low.svc.previewImportForCustomer('customer1', 'orders.xlsx', [row, { ...row, rowNo: 3 }]);
+  assert.deepEqual(lowPreview.map(item => item.status), ['READY', 'ERROR']);
+  assert.equal(low.ledgers.length, 0);
+  const sandbox = orderHarness(); sandbox.resolved.supplier.environment = 'SANDBOX';
+  assert.equal((await sandbox.svc.previewImportForCustomer('customer1', 'orders.xlsx', [row]))[0].status, 'ERROR');
+  assert.equal((await sandbox.svc.importForCustomer('customer1', 'orders.xlsx', [row]))[0].status, 'ERROR');
+  assert.equal(sandbox.ledgers.length, 0);
+  assert.equal((await h.svc.previewImportForCustomer('customer1', 'other.xlsx', [{ ...row, serviceCode: 'PRIVATE' }]))[0].status, 'ERROR');
+});
+test('customer Excel DTO rejects customer and supplier overrides while accepting nested order data', async () => {
+  const h = orderHarness();
+  const { supplierId: _supplierId, idempotencyKey: _idempotencyKey, ...order } = h.input;
+  const body = { sourceFileName: 'orders.xlsx', rows: [{ rowNo: 2, serviceCode: 'UPS_STANDARD', order }] };
+  const valid = plainToInstance(CustomerImportOrdersDto, body);
+  assert.equal((await validate(valid, { whitelist: true, forbidNonWhitelisted: true })).length, 0);
+  const forbidden = plainToInstance(CustomerImportOrdersDto, { ...body, rows: [{ ...body.rows[0], customerId: 'other', order: { ...order, supplierId: 'private' } }] });
+  assert.notEqual((await validate(forbidden, { whitelist: true, forbidNonWhitelisted: true })).length, 0);
 });
 test('idempotent order re-submit does not debit again; unsupported field/address, route and balance failures do not create', async () => {
   const h = orderHarness(); const first = await h.svc.createForCustomer('customer1', h.input); const second = await h.svc.createForCustomer('customer1', h.input); assert.equal(first.id, second.id); assert.equal(h.ledgers.length, 1); assert.equal(h.counts().quotes, 1);

@@ -19,3 +19,9 @@ body { margin: 0; }
 .customer-tracking-event small { display: block; margin-top: 2px; }
 @media (max-width: 720px) { .customer-header { padding: 0 18px; }.customer-header span { display: none; }.customer-main { width: calc(100% - 28px); margin: 24px auto; }.customer-hero { align-items: flex-start; flex-direction: column; gap: 22px; padding: 24px; }.customer-status { width: 100%; min-height: 100px; }.customer-login__panel { padding: 28px; } }
 .customer-create__notice { margin-bottom: 16px; }.customer-manifest__heading { display: flex; align-items: center; justify-content: space-between; margin: 22px 0 12px; padding: 0 2px; color: #1a6173; font-weight: 800; letter-spacing: .4px; }.customer-manifest { margin-top: 12px; border: 1px solid #dce8ee; background: #fbfeff; }.customer-declaration { margin: 12px 0; padding: 12px 12px 2px; border-left: 3px solid #45afba; background: #fff; }.customer-quote { margin-top: 18px; }
+.customer-import__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0; }
+.customer-import__services { margin-top: 16px; background: #f7fbfd; }
+.customer-import .ant-table-wrapper { overflow: hidden; border: 1px solid #e6edf2; border-radius: 10px; }
+.customer-recharge-preview { display: grid; max-height: 70vh; place-items: center; overflow: auto; background: #eef3f5; }
+.customer-recharge-preview img { max-width: 100%; height: auto; }
+@media (max-width: 720px) { .customer-header { height: auto; min-height: 64px; gap: 12px; padding-top: 10px; padding-bottom: 10px; }.customer-header > .ant-space { flex-wrap: wrap; justify-content: flex-end; }.customer-import__actions { align-items: flex-start; flex-direction: column; } }

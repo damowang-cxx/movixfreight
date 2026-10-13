@@ -76,6 +76,23 @@ body { margin: 0; min-width: 1180px; }
 .remote-rule-row .ant-form-item { margin-bottom: 8px; }
 .service-surcharge-card { margin-top: 20px; border-top: 3px solid #eaa13c; }
 .api-key-reveal { margin-top: 16px; }
+.recharge-panel { border-top: 3px solid #168a98; }
+.recharge-panel__balances { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.recharge-panel__balances span { flex: 1 1 150px; padding: 9px 12px; border: 1px solid #dce9ee; border-radius: 8px; background: #f7fbfc; color: #52717e; font-size: 12px; }
+.recharge-panel__balances strong { display: block; margin-top: 2px; color: #183f50; font-size: 17px; font-variant-numeric: tabular-nums; }
+.recharge-panel__proof { padding: 13px; border: 1px dashed #82b9c1; border-radius: 10px; background: #f7fcfc; outline: none; }
+.recharge-panel__proof:focus-visible { box-shadow: 0 0 0 3px #85d9e06b; }
+.recharge-panel__proof-copy { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 10px; color: #216478; }
+.recharge-panel__proof-copy b, .recharge-panel__proof-copy small, .recharge-panel__proof-selected small { display: block; }
+.recharge-panel__proof-copy b span { color: #c23b42; }
+.recharge-panel__proof-copy small, .recharge-panel__proof-selected small { margin-top: 3px; color: #617d86; font-size: 12px; }
+.recharge-panel__proof-selected { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+.recharge-panel__proof-selected img { width: 72px; height: 72px; object-fit: contain; border: 1px solid #dce9ee; border-radius: 5px; background: #fff; }
+.recharge-panel__proof-selected b { overflow-wrap: anywhere; }
+.recharge-panel__history-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 22px 0 10px; padding-bottom: 7px; border-bottom: 1px solid #dce9ee; color: #205a6b; }
+.recharge-panel__more { display: block; margin: 14px auto 0; }
+.recharge-panel__image-view { display: grid; max-height: 70vh; place-items: center; overflow: auto; background: #eef3f5; }
+.recharge-panel__image-view img { max-width: 100%; height: auto; }
 .label-template-page { background: linear-gradient(135deg, #fff 0%, #fbfeff 60%, #f1f9fa 100%); }
 .label-template-element-form { margin-top: 10px; padding: 12px 10px 1px; border-left: 3px solid #36a9b7; background: #f7fbfc; }
 .label-template-element-form .ant-form-item { margin-bottom: 8px; }

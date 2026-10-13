@@ -1,8 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { AdminRole } from '@prisma/client';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { IsBoolean, IsOptional, IsString } from 'class-validator';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CustomersService } from './customers.service';
+import type { RechargeImage } from './customers.service';
 import { CurrentUser, RequireAdminRoles } from '../auth/decorators';
 import type { AuthPrincipal } from '../auth/auth.types';
 import { CreateCustomerDto } from './dto/create-customer.dto';
@@ -46,9 +49,23 @@ export class CustomersAdminController {
   @Patch(':customerId/classification') updateClassification(@Param('customerId') customerId: string, @Body() input: CustomerClassificationDto) { return this.customers.updateClassification(customerId, input); }
 
   @Post(':customerId/wallet-adjustments')
-  @ApiOperation({ summary: '管理员人工余额入账或扣减' })
-  adjustWallet(@Param('customerId') customerId: string, @Body() input: WalletAdjustmentDto, @CurrentUser() operator: AuthPrincipal) {
-    return this.customers.adjustWallet(customerId, input, operator.sub);
+  @RequireAdminRoles(AdminRole.SUPER_ADMIN, AdminRole.FINANCE)
+  @UseInterceptors(FileInterceptor('receipt', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  @ApiOperation({ summary: '管理员人工入账或扣减；可选水单与入账流水原子写入' })
+  adjustWallet(@Param('customerId') customerId: string, @Body() input: WalletAdjustmentDto, @UploadedFile() receipt: RechargeImage | undefined, @CurrentUser() operator: AuthPrincipal) {
+    return this.customers.adjustWallet(customerId, input, operator.sub, receipt);
+  }
+
+  @Get(':customerId/recharges')
+  rechargeHistory(@Param('customerId') customerId: string, @Query('cursor') cursor?: string) { return this.customers.rechargeHistory(customerId, true, cursor); }
+
+  @Get(':customerId/recharges/:ledgerId/receipt')
+  async rechargeReceipt(@Param('customerId') customerId: string, @Param('ledgerId') ledgerId: string, @Res() response: Response) {
+    const receipt = await this.customers.rechargeReceipt(customerId, ledgerId);
+    response.setHeader('Content-Type', receipt.mimeType);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    response.send(Buffer.from(receipt.content));
   }
 
   @Post(':customerId/api-key')

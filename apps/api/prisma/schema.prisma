@@ -294,6 +294,19 @@ model WalletLedger {
   operatorId       String?
   createdAt        DateTime         @default(now())
   wallet           CustomerWallet   @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  rechargeReceipt  RechargeReceipt?
+}
+
+model RechargeReceipt {
+  id           String       @id @default(cuid())
+  ledgerId     String       @unique
+  fileName     String
+  mimeType     String
+  byteSize     Int
+  sha256       String
+  content      Bytes
+  createdAt    DateTime     @default(now())
+  ledger       WalletLedger @relation(fields: [ledgerId], references: [id], onDelete: Restrict)
 }
 
 model BalanceAlertSetting {
