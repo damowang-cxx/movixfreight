@@ -6,6 +6,7 @@ import 'antd/dist/reset.css';
 import './styles.css';
 import { CustomerOrderImport } from './customer-order-import';
 import { CustomerRecharges } from './customer-recharges';
+import { useAppVersion } from './use-app-version';
 
 const API = import.meta.env.VITE_API_BASE ?? '/api';
 
@@ -24,6 +25,11 @@ function downloadPdf(blob: Blob, filename: string) { const url = URL.createObjec
 
 function CustomerApp() {
   const [token, setToken] = useState(() => localStorage.getItem('movix.customer.token') ?? '');
+  const activeToken = useRef(token);
+  const [initializing, setInitializing] = useState(Boolean(token));
+  const [bootstrapError, setBootstrapError] = useState('');
+  const updateAvailable = useAppVersion();
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [account, setAccount] = useState<any>(null);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
@@ -35,21 +41,56 @@ function CustomerApp() {
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   const [loading, setLoading] = useState(false);
+  const clearSession = useCallback((expired = false, expectedToken?: string) => {
+    if (expectedToken && activeToken.current !== expectedToken) return;
+    if (!activeToken.current) return;
+    activeToken.current = '';
+    localStorage.removeItem('movix.customer.token');
+    setToken(''); setAccount(null); setNotifications([]); setOrders([]); setSuppliers([]); setServices([]); setCountries([]); setDeclarationFields(null);
+    setCreating(false); setImporting(false); setLoading(false); setInitializing(false); setBootstrapError('');
+    if (expired) message.warning('登录已过期，请重新登录');
+  }, []);
   const request = useCallback(async (path: string, options: RequestInit = {}) => {
     const response = await fetch(`${API}${path}`, { ...options, headers: { Authorization: `Bearer ${token}`, ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
-    if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(Array.isArray(body.message) ? body.message.join('；') : body.message || `请求失败（${response.status}）`); }
+    if (!response.ok) {
+      if (response.status === 401) clearSession(true, token);
+      const body = await response.json().catch(() => ({}));
+      const error = new Error(Array.isArray(body.message) ? body.message.join('；') : body.message || `请求失败（${response.status}）`) as Error & { status?: number };
+      error.status = response.status;
+      throw error;
+    }
     return response;
-  }, [token]);
+  }, [clearSession, token]);
   const refresh = useCallback(async () => {
     if (!token) return;
     setLoading(true);
     try {
       const [nextAccount, nextNotifications, nextDeclarationFields, nextCountries] = await Promise.all([request('/customer/v1/account').then((response) => response.json()), request('/customer/v1/notifications').then((response) => response.json()), request('/customer/v1/declaration-fields').then((response) => response.json()), request('/customer/v1/countries').then((response) => response.json())]);
+      if (activeToken.current !== token) return;
       setAccount(nextAccount); setNotifications(nextNotifications); setDeclarationFields(nextDeclarationFields); setCountries(nextCountries);
-      if (nextAccount.status !== 'FROZEN') { const [nextOrders, nextSuppliers, nextServices] = await Promise.all([request('/customer/v1/orders').then((response) => response.json()), request('/customer/v1/orders/orderable-suppliers').then((response) => response.json()), request('/customer/v1/services').then((response) => response.json())]); setOrders(nextOrders); setSuppliers(nextSuppliers); setServices(nextServices); } else { setOrders([]); setSuppliers([]); setServices([]); }
-    } catch (error) { message.error(errorText(error)); } finally { setLoading(false); }
+      if (nextAccount.status !== 'FROZEN') { const [nextOrders, nextSuppliers, nextServices] = await Promise.all([request('/customer/v1/orders').then((response) => response.json()), request('/customer/v1/orders/orderable-suppliers').then((response) => response.json()), request('/customer/v1/services').then((response) => response.json())]); if (activeToken.current !== token) return; setOrders(nextOrders); setSuppliers(nextSuppliers); setServices(nextServices); } else { setOrders([]); setSuppliers([]); setServices([]); }
+      setBootstrapError('');
+    } catch (error) {
+      if ((error as { status?: number }).status !== 401) { setBootstrapError(errorText(error)); message.error(errorText(error)); }
+    } finally { if (activeToken.current === token) { setLoading(false); setInitializing(false); } }
   }, [request, token]);
   useEffect(() => { void refresh(); }, [refresh]);
+  const lastResumeCheck = useRef(Date.now());
+  useEffect(() => {
+    if (!token) return;
+    const revalidate = (force = false) => {
+      if (document.hidden || (!force && Date.now() - lastResumeCheck.current < 60_000)) return;
+      lastResumeCheck.current = Date.now();
+      void request('/customer/v1/account').then((response) => response.json()).then((nextAccount) => {
+        if (activeToken.current === token) setAccount(nextAccount);
+      }).catch((error) => { if ((error as { status?: number }).status !== 401) message.warning('会话检查暂时失败，请检查网络后重试'); });
+    };
+    const onVisible = () => revalidate();
+    const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) revalidate(true); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onPageShow);
+    return () => { document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('pageshow', onPageShow); };
+  }, [request, token]);
   useEffect(() => { ordersRef.current = orders; }, [orders]);
   const hasPendingDispatch = orders.some(isPendingDispatch);
   useEffect(() => {
@@ -83,12 +124,17 @@ function CustomerApp() {
   }, [account?.status, request, token]);
   const completeLogin = (value: string) => {
     if (!value) { message.error('登录响应缺少访问令牌'); return; }
+    activeToken.current = value;
     localStorage.setItem('movix.customer.token', value);
+    setBootstrapError(''); setInitializing(true);
     setToken(value);
   };
-  if (!token) return <Login onSuccess={completeLogin} />;
-  const logout = () => { localStorage.removeItem('movix.customer.token'); setToken(''); setAccount(null); setNotifications([]); setOrders([]); setSuppliers([]); setServices([]); setCountries([]); setDeclarationFields(null); };
-  return <Layout className="customer-layout"><header className="customer-header"><b><i>M</i> MOVIX FREIGHT</b><Space><Badge count={notifications.filter((item) => !item.readAt).length} size="small"><span className="customer-header__notice"><BellOutlined /> 消息</span></Badge><span>{account?.username ?? '客户自助中心'}</span>{account?.status !== 'FROZEN' && <Button icon={<FileExcelOutlined />} onClick={() => setImporting(true)}>Excel 批量导入</Button>}{account?.status !== 'FROZEN' && <Button type="primary" onClick={() => setCreating(true)}>创建运单</Button>}<Button type="text" icon={<LogoutOutlined />} onClick={logout}>退出</Button></Space></header><main className="customer-main"><Spin spinning={loading}>{account && <Portal account={account} notifications={notifications} orders={orders} request={request} refresh={refresh} />}</Spin></main><Modal open={creating} footer={null} width={1060} destroyOnClose onCancel={() => setCreating(false)} title="创建运单"><CustomerOrderCreate suppliers={suppliers} countries={countries} declarationFields={declarationFields} request={request} onDone={async () => { setCreating(false); await refresh(); }} /></Modal><Modal open={importing} footer={null} width={1060} destroyOnClose onCancel={() => setImporting(false)} title="Excel 批量导入运单"><CustomerOrderImport services={services} request={request} onDone={refresh} /></Modal></Layout>;
+  const logout = () => clearSession();
+  const versionNotice = updateAvailable && <><Alert banner showIcon type="warning" message="系统已发布新版本；刷新前请先保存正在填写的内容。" action={<Button size="small" onClick={() => setShowUpdateDialog(true)}>刷新页面</Button>} /><Modal open={showUpdateDialog} title="刷新到新版本？" okText="刷新页面" onOk={() => window.location.reload()} onCancel={() => setShowUpdateDialog(false)}>刷新将清空尚未提交的运单表单和导入预览。</Modal></>;
+  if (!token) return <>{versionNotice}<Login onSuccess={completeLogin} /></>;
+  if (initializing) return <>{versionNotice}<main className="customer-login"><Spin size="large" tip="正在验证登录状态"><div style={{ width: 280, height: 120 }} /></Spin></main></>;
+  if (!account) return <>{versionNotice}<main className="customer-login"><Card title="暂时无法加载客户中心" style={{ width: 380 }}><Typography.Paragraph>{bootstrapError || '请检查网络连接后重试。'}</Typography.Paragraph><Space><Button type="primary" onClick={() => void refresh()}>重试</Button><Button onClick={logout}>重新登录</Button></Space></Card></main></>;
+  return <>{versionNotice}<Layout className="customer-layout"><header className="customer-header"><b><i>M</i> MOVIX FREIGHT</b><Space><Badge count={notifications.filter((item) => !item.readAt).length} size="small"><span className="customer-header__notice"><BellOutlined /> 消息</span></Badge><span>{account?.username ?? '客户自助中心'}</span>{account?.status !== 'FROZEN' && <Button icon={<FileExcelOutlined />} onClick={() => setImporting(true)}>Excel 批量导入</Button>}{account?.status !== 'FROZEN' && <Button type="primary" onClick={() => setCreating(true)}>创建运单</Button>}<Button type="text" icon={<LogoutOutlined />} onClick={logout}>退出</Button></Space></header><main className="customer-main"><Spin spinning={loading}><Portal account={account} notifications={notifications} orders={orders} request={request} refresh={refresh} /></Spin></main><Modal open={creating} footer={null} width={1060} destroyOnClose onCancel={() => setCreating(false)} title="创建运单"><CustomerOrderCreate suppliers={suppliers} countries={countries} declarationFields={declarationFields} request={request} onDone={async () => { setCreating(false); await refresh(); }} /></Modal><Modal open={importing} footer={null} width={1060} destroyOnClose onCancel={() => setImporting(false)} title="Excel 批量导入运单"><CustomerOrderImport services={services} request={request} onDone={refresh} /></Modal></Layout></>;
 }
 
 function Login({ onSuccess }: { onSuccess: (token: string) => void }) {

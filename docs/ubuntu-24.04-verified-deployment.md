@@ -287,6 +287,17 @@ bash infra/scripts/update-production.sh --yes
 
 如果更新涉及 `apps/api/prisma/`，脚本会在拉取前停止；必须按数据库变更流程手工审查/执行 SQL，不能让脚本自动执行 `db push`。
 
+前端版本更新从双前端容器提供的 `version.json` 检测；普通刷新依赖 HTML 的 `Cache-Control: no-cache, must-revalidate` 加载新版哈希资源。更新后应检查以下响应头及版本文件（管理员端的 `/admin/` 前缀由宿主机 Nginx 转发）：
+
+```bash
+curl -I https://movixfreight.com/
+curl -I https://movixfreight.com/admin/
+curl -I https://movixfreight.com/version.json
+curl -I https://movixfreight.com/admin/version.json
+```
+
+首页 HTML 应要求重新验证，版本文件应为 `no-store`；`/assets/` 和 `/admin/assets/` 下的带哈希文件可长期缓存。只更新 API/Worker 不会改变前端页面；涉及界面的版本必须重建并启动 `admin-web` 和 `customer-web`。已打开的旧页面会提示刷新，但不会在编辑运单时强制重载。
+
 单独备份数据库：
 
 ```bash

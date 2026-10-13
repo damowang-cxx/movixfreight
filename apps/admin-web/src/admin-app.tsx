@@ -6,9 +6,11 @@ import { Alert, AutoComplete, Avatar, Button, Card, Checkbox, Col, Descriptions,
 import type { MenuProps } from 'antd';
 import * as XLSX from 'xlsx';
 import { RechargePanel } from './recharge-panel';
+import { useAppVersion } from './use-app-version';
 
 const { Header, Sider, Content } = Layout;
 const API = import.meta.env.VITE_API_BASE ?? '/api';
+const EMPTY_ADMIN_DATA = { status: null, drivers: [], carriers: [], suppliers: [], services: [], customers: [], customerLevels: [], customerGroups: [], orders: [], countries: [], costs: [], profits: [], profitServices: [], remoteTemplates: [], bills: [], reconciliations: [], cancellationRefunds: [], alertSettings: [], alertNotifications: [], settings: null, declarationFields: null, labelTemplates: { templates: [], capabilities: [] } };
 type Tab = { key: string; label: string };
 type Context = { data: any; request: (path: string, options?: RequestInit) => Promise<Response>; refresh: () => Promise<void>; logout: () => void; };
 
@@ -51,15 +53,31 @@ async function previewLabel(blob: Blob, popup?: Window | string | null) { const 
 
 export function AdminApp() {
   const [token, setToken] = useState(() => localStorage.getItem('movix.admin.token') ?? '');
+  const activeToken = useRef(token);
+  const [initializing, setInitializing] = useState(Boolean(token));
+  const [bootstrapError, setBootstrapError] = useState('');
+  const updateAvailable = useAppVersion();
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [tabs, setTabs] = useState<Tab[]>(loadTabs);
   const [active, setActive] = useState(() => localStorage.getItem('movix.admin.active-tab') ?? 'home');
   const [siderCollapsed, setSiderCollapsed] = useState(() => localStorage.getItem('movix.admin.sider-collapsed') === '1');
-  const [data, setData] = useState<any>({ status: null, drivers: [], carriers: [], suppliers: [], services: [], customers: [], customerLevels: [], customerGroups: [], orders: [], countries: [], costs: [], profits: [], profitServices: [], remoteTemplates: [], bills: [], reconciliations: [], cancellationRefunds: [], alertSettings: [], alertNotifications: [], settings: null, declarationFields: null, labelTemplates: { templates: [], capabilities: [] } });
+  const [data, setData] = useState<any>(EMPTY_ADMIN_DATA);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const clearSession = useCallback((expired = false, expectedToken?: string) => {
+    if (expectedToken && activeToken.current !== expectedToken) return;
+    if (!activeToken.current) return;
+    activeToken.current = '';
+    localStorage.removeItem('movix.admin.token'); localStorage.removeItem('movix.admin.tabs'); localStorage.removeItem('movix.admin.active-tab');
+    setToken(''); setTabs([{ key: 'home', label: '首页' }]); setActive('home'); setData(EMPTY_ADMIN_DATA);
+    setAvatarUrl((current) => { if (current) URL.revokeObjectURL(current); return null; });
+    setLoading(false); setInitializing(false); setBootstrapError('');
+    if (expired) message.warning('登录已过期，请重新登录');
+  }, []);
   const request = useCallback(async (path: string, options: RequestInit = {}) => {
     const response = await fetch(`${API}${path}`, { ...options, headers: { Authorization: `Bearer ${token}`, ...(options.body && !(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
     if (!response.ok) {
+      if (response.status === 401) clearSession(true, token);
       const body = await response.json().catch(() => ({}));
       const messageText = Array.isArray(body.message) ? body.message.join('；') : body.message || `请求失败（${response.status}）`;
       const detailText = Array.isArray(body.errors) ? body.errors.map((item: any) => `${item.code ? `[${item.code}] ` : ''}${item.message ?? String(item)}`).join('；') : body.errors?.message ?? '';
@@ -68,37 +86,63 @@ export function AdminApp() {
       throw error;
     }
     return response;
-  }, [token]);
+  }, [clearSession, token]);
   const refresh = useCallback(async () => {
     if (!token) return; setLoading(true);
     try {
       const paths = ['/admin/v1/products/fedex-relay-status', '/admin/v1/products/connector-drivers', '/admin/v1/products/carriers', '/admin/v1/products/suppliers', '/admin/v1/products/services', '/admin/v1/products/remote-templates', '/admin/v1/customers', '/admin/v1/customers/levels', '/admin/v1/customers/groups', '/admin/v1/orders', '/admin/v1/pricing/countries', '/admin/v1/pricing/cost-tables', '/admin/v1/pricing/profit-versions', '/admin/v1/pricing/profit-services', '/admin/v1/billing/imports', '/admin/v1/billing/reconciliations', '/admin/v1/billing/cancellation-refunds', '/admin/v1/balance-alerts/settings', '/admin/v1/balance-alerts/notifications', '/admin/v1/settings/me', '/admin/v1/settings/declaration-fields', '/admin/v1/settings/label-templates'];
       const result = await Promise.all(paths.map(async (path) => (await request(path)).json()));
+      if (activeToken.current !== token) return;
       const [status, drivers, carriers, suppliers, services, remoteTemplates, customers, customerLevels, customerGroups, orders, countries, costs, profits, profitServices, bills, reconciliations, cancellationRefunds, alertSettings, alertNotifications, settings, declarationFields, labelTemplates] = result;
       setData({ status, drivers, carriers, suppliers, services, remoteTemplates, customers, customerLevels, customerGroups, orders, countries, costs, profits, profitServices, bills, reconciliations, cancellationRefunds, alertSettings, alertNotifications, settings, declarationFields, labelTemplates });
       if (settings.hasAvatar) {
         const avatar = await request('/admin/v1/settings/avatar');
         const nextUrl = URL.createObjectURL(await avatar.blob());
-        setAvatarUrl((current) => { if (current) URL.revokeObjectURL(current); return nextUrl; });
-      } else setAvatarUrl((current) => { if (current) URL.revokeObjectURL(current); return null; });
-    } catch (error) { message.error(errorText(error)); } finally { setLoading(false); }
+        if (activeToken.current === token) setAvatarUrl((current) => { if (current) URL.revokeObjectURL(current); return nextUrl; });
+        else URL.revokeObjectURL(nextUrl);
+      } else if (activeToken.current === token) setAvatarUrl((current) => { if (current) URL.revokeObjectURL(current); return null; });
+      setBootstrapError('');
+    } catch (error) {
+      if ((error as { status?: number }).status !== 401) { setBootstrapError(errorText(error)); message.error(errorText(error)); }
+    } finally { if (activeToken.current === token) { setLoading(false); setInitializing(false); } }
   }, [request, token]);
   useEffect(() => { void refresh(); }, [refresh]);
+  const lastResumeCheck = useRef(Date.now());
+  useEffect(() => {
+    if (!token) return;
+    const revalidate = (force = false) => {
+      if (document.hidden || (!force && Date.now() - lastResumeCheck.current < 60_000)) return;
+      lastResumeCheck.current = Date.now();
+      void request('/admin/v1/settings/me').then((response) => response.json()).then((settings) => {
+        if (activeToken.current === token) setData((current: any) => ({ ...current, settings }));
+      }).catch((error) => { if ((error as { status?: number }).status !== 401) message.warning('会话检查暂时失败，请检查网络后重试'); });
+    };
+    const onVisible = () => revalidate();
+    const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) revalidate(true); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onPageShow);
+    return () => { document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('pageshow', onPageShow); };
+  }, [request, token]);
   useEffect(() => localStorage.setItem('movix.admin.tabs', JSON.stringify(tabs)), [tabs]);
   useEffect(() => localStorage.setItem('movix.admin.active-tab', active), [active]);
   useEffect(() => localStorage.setItem('movix.admin.sider-collapsed', siderCollapsed ? '1' : '0'), [siderCollapsed]);
   const completeLogin = (value: string) => {
     if (!value) { message.error('登录响应缺少访问令牌'); return; }
+    activeToken.current = value;
     localStorage.setItem('movix.admin.token', value);
+    setBootstrapError(''); setInitializing(true);
     setToken(value);
   };
-  if (!token) return <Login onSuccess={completeLogin} />;
+  const logout = () => clearSession();
+  const versionNotice = updateAvailable && <><Alert banner showIcon type="warning" message="系统已发布新版本；刷新前请先保存正在填写的内容。" action={<Button size="small" onClick={() => setShowUpdateDialog(true)}>刷新页面</Button>} /><Modal open={showUpdateDialog} title="刷新到新版本？" okText="刷新页面" onOk={() => window.location.reload()} onCancel={() => setShowUpdateDialog(false)}>刷新将清空尚未保存的表单内容；已保存的订单与资料不会丢失。</Modal></>;
+  if (!token) return <>{versionNotice}<Login onSuccess={completeLogin} /></>;
+  if (initializing) return <>{versionNotice}<main className="login-page"><Spin size="large" tip="正在验证登录状态"><div style={{ width: 280, height: 120 }} /></Spin></main></>;
+  if (!data.settings) return <>{versionNotice}<main className="login-page"><Card title="暂时无法加载管理端" style={{ width: 380 }}><Typography.Paragraph>{bootstrapError || '请检查网络连接后重试。'}</Typography.Paragraph><Space><Button type="primary" onClick={() => void refresh()}>重试</Button><Button onClick={logout}>重新登录</Button></Space></Card></main></>;
   const open = (key: string) => { const label = key.startsWith('cost-table:') ? '成本表详情' : key.startsWith('profit-service:') ? '服务利润详情' : labels[key] ?? key; setTabs((current) => current.some((tab) => tab.key === key) ? current : [...current, { key, label }]); setActive(key); };
   const close = (key: string) => { setTabs((current) => current.filter((tab) => tab.key !== key)); if (active === key) setActive('home'); };
-  const logout = () => { localStorage.removeItem('movix.admin.token'); localStorage.removeItem('movix.admin.tabs'); localStorage.removeItem('movix.admin.active-tab'); setToken(''); setTabs([{ key: 'home', label: '首页' }]); setActive('home'); };
   const context: Context = { data, request, refresh, logout };
   const accountMenu = { items: [{ key: 'settings', label: '系统设置', onClick: () => open('system-settings') }, { type: 'divider' as const }, { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: logout }] };
-  return <Layout className="admin-layout"><Sider width={244} collapsedWidth={72} collapsed={siderCollapsed} trigger={null} className="admin-sider"><div className="brand"><span className="brand-mark">M</span><span className="brand-name">MOVIX FREIGHT</span><Button className="sider-toggle" type="text" icon={siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} aria-label={siderCollapsed ? '展开导航栏' : '收起导航栏'} title={siderCollapsed ? '展开导航栏' : '收起导航栏'} onClick={() => setSiderCollapsed((value) => !value)} /></div><div className="rail-caption">OPERATIONS WORKSPACE</div><Menu mode="inline" inlineCollapsed={siderCollapsed} items={menuItems} onClick={({ key }) => open(String(key))} className="admin-menu" /></Sider><Layout><Header className="system-header"><Space><span className="header-note">渠道区分承运商，供应商连接区分账号与环境</span></Space><Dropdown menu={accountMenu} trigger={['click']}><Button type="text" aria-label="管理员账户菜单"><Avatar src={avatarUrl ?? undefined}>{data.settings?.displayName?.slice(0, 1)?.toUpperCase() ?? 'M'}</Avatar></Button></Dropdown></Header><div className="tab-strip"><Button type="text" icon={<HomeOutlined />} onClick={() => setActive('home')} />{tabs.map((tab) => <button className={`workspace-tab ${tab.key === active ? 'active' : ''}`} key={tab.key} onClick={() => setActive(tab.key)}>{tab.label}{tab.key !== 'home' && <span className="tab-close" onClick={(e) => { e.stopPropagation(); close(tab.key); }}>×</span>}</button>)}</div><Content className="workspace-content"><Spin spinning={loading}>{renderPage(active, context, open)}</Spin></Content></Layout></Layout>;
+  return <>{versionNotice}<Layout className="admin-layout"><Sider width={244} collapsedWidth={72} collapsed={siderCollapsed} trigger={null} className="admin-sider"><div className="brand"><span className="brand-mark">M</span><span className="brand-name">MOVIX FREIGHT</span><Button className="sider-toggle" type="text" icon={siderCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} aria-label={siderCollapsed ? '展开导航栏' : '收起导航栏'} title={siderCollapsed ? '展开导航栏' : '收起导航栏'} onClick={() => setSiderCollapsed((value) => !value)} /></div><div className="rail-caption">OPERATIONS WORKSPACE</div><Menu mode="inline" inlineCollapsed={siderCollapsed} items={menuItems} onClick={({ key }) => open(String(key))} className="admin-menu" /></Sider><Layout><Header className="system-header"><Space><span className="header-note">渠道区分承运商，供应商连接区分账号与环境</span></Space><Dropdown menu={accountMenu} trigger={['click']}><Button type="text" aria-label="管理员账户菜单"><Avatar src={avatarUrl ?? undefined}>{data.settings?.displayName?.slice(0, 1)?.toUpperCase() ?? 'M'}</Avatar></Button></Dropdown></Header><div className="tab-strip"><Button type="text" icon={<HomeOutlined />} onClick={() => setActive('home')} />{tabs.map((tab) => <button className={`workspace-tab ${tab.key === active ? 'active' : ''}`} key={tab.key} onClick={() => setActive(tab.key)}>{tab.label}{tab.key !== 'home' && <span className="tab-close" onClick={(e) => { e.stopPropagation(); close(tab.key); }}>×</span>}</button>)}</div><Content className="workspace-content"><Spin spinning={loading}>{renderPage(active, context, open)}</Spin></Content></Layout></Layout></>;
 }
 
 function renderPage(key: string, context: Context, open: (key: string) => void) {
