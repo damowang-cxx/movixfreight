@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { Order, OrderBox, OrderItemDeclaration, Service, Supplier } from '@prisma/client';
 import { FedexRelayConfig } from './fedex-relay.config';
 import { SettingsService } from '../settings/settings.service';
@@ -28,6 +29,10 @@ export class FedexRelayMapper {
       shippingChargesPayment: { paymentType: 'SENDER' }, labelSpecification,
       requestedPackageLineItems: order.boxes.map((box, index) => ({ sequenceNumber: String(index + 1), groupPackageCount: 1, weight: { units: 'KG', value: Number(box.weightKg) }, dimensions: { length: Number(box.lengthCm), width: Number(box.widthCm), height: Number(box.heightCm), units: 'CM' }, customerReferences: [{ customerReferenceType: 'CUSTOMER_REFERENCE', value: order.orderNo }] })),
     };
+    if (order.boxes.length > 1) {
+      requestedShipment.totalPackageCount = order.boxes.length;
+      requestedShipment.totalWeight = Number(order.boxes.reduce((total, box) => total.plus(box.weightKg), new Prisma.Decimal(0)));
+    }
     // 新订单必须由不可变国家路由显式决定是否下发清关货品，不能仅依目的国猜测。
     const customsMode = route?.fieldSchema?.customsMode;
     if (customsMode !== 'NONE' && customsMode !== 'COMMODITIES') throw new BadRequestException('订单缺少 FedEx 路由清关规则，不能重新发起面单请求');
