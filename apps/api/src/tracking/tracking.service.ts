@@ -5,6 +5,9 @@ import { FedexRelayConfig } from '../connectors/fedex-relay.config';
 import { FedexRelayConnector } from '../connectors/fedex-relay.connector';
 import { UpsOfficialConfig } from '../connectors/ups-official.config';
 import { UpsOfficialConnector, UpsRequestError } from '../connectors/ups-official.connector';
+import { DpdRelayConfig } from '../connectors/dpd-relay.config';
+import { DpdRelayConnector, DpdRequestError } from '../connectors/dpd-relay.connector';
+import { mapDpdTrack } from '../connectors/dpd-relay.tracking';
 import { mapFedexTrack, mapUpsTrack, type TrackingResult, type TrackingStatus } from './tracking.mapper';
 
 const TERMINAL: TrackingStatus[] = ['DELIVERED', 'RETURNED'];
@@ -24,6 +27,8 @@ export class TrackingService {
     private readonly fedex: FedexRelayConnector,
     private readonly upsConfig: UpsOfficialConfig,
     private readonly ups: UpsOfficialConnector,
+    private readonly dpdConfig?: DpdRelayConfig,
+    private readonly dpd?: DpdRelayConnector,
   ) {}
 
   async listSummaries(orderIds: string[], admin: boolean) {
@@ -79,7 +84,7 @@ export class TrackingService {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { service: { include: { supplier: true } }, boxes: true, labels: { select: { boxId: true, trackingNumber: true } } } });
     if (!order || !ORDER_ACTIVE.includes(order.shipmentStatus as any)) return;
     const driver = (order.supplierRouteSnapshot as any)?.driverCode ?? order.service.supplier.driverCode;
-    if (!['UPS_OFFICIAL', 'FEDEX_RELAY'].includes(driver)) return;
+    if (!['UPS_OFFICIAL', 'FEDEX_RELAY', 'DPD_RELAY_UK'].includes(driver)) return;
     const targets = new Map<string, string | null>();
     for (const box of order.boxes) if (box.carrierTrackingNumber) targets.set(box.carrierTrackingNumber, box.id);
     for (const label of order.labels) if (label.trackingNumber) targets.set(label.trackingNumber, label.boxId ?? targets.get(label.trackingNumber) ?? null);
@@ -112,6 +117,10 @@ export class TrackingService {
         const token = await this.ups.getAccessToken(supplier.code, profile);
         try { result = mapUpsTrack((await this.ups.track(profile, token, row.trackingNumber)).body, row.trackingNumber); }
         catch (error) { if (error instanceof UpsRequestError && error.upstreamStatus === 404) result = mapUpsTrack({}, row.trackingNumber); else throw error; }
+      } else if (row.driverCode === 'DPD_RELAY_UK' && this.dpdConfig && this.dpd) {
+        const profile = this.dpdConfig.connection(supplier.code, supplier.environment);
+        if (snapshot?.accountFingerprint !== this.dpdConfig.accountFingerprint(profile)) throw new Error('DPD 原账号或发件仓已改变');
+        result = mapDpdTrack((await this.dpd.track(profile, row.trackingNumber)).body, row.trackingNumber);
       } else throw new Error('当前供应商驱动未实现轨迹查询');
       const status = result.status === 'UNKNOWN' && !result.events.length ? 'LABEL_CREATED' : result.status;
       const nextMinutes = status === 'LABEL_CREATED' ? 120 : status === 'EXCEPTION' ? 120 : 60;
@@ -127,7 +136,7 @@ export class TrackingService {
       const count = row.failureCount + 1; const delay = Math.min(24 * 60, 15 * 2 ** Math.min(count, 6));
       const technicalError = error instanceof Error ? error.message.replace(/https?:\/\/\S+/g, '[URL]').slice(0, 500) : '未知轨迹查询错误';
       await this.prisma.shipmentTracking.update({ where: { id }, data: { syncStatus: 'ERROR', publicMessage: '轨迹暂时无法更新，已保留上次结果，系统稍后重试', technicalError, failureCount: count, claimedAt: null, nextSyncAt: new Date(Date.now() + delay * 60_000) } });
-      await this.prisma.connectorCallLog.create({ data: { orderId: row.orderId, driverCode: row.driverCode, operation: 'TRACK_SHIPMENT', status: 'FAILED', httpStatus: error instanceof UpsRequestError ? error.upstreamStatus : null, requestPayload: { trackingNumber: row.trackingNumber }, errorMessage: technicalError } });
+      await this.prisma.connectorCallLog.create({ data: { orderId: row.orderId, driverCode: row.driverCode, operation: 'TRACK_SHIPMENT', status: 'FAILED', httpStatus: error instanceof UpsRequestError || error instanceof DpdRequestError ? error.upstreamStatus : null, requestPayload: { trackingNumber: row.trackingNumber }, errorMessage: technicalError } });
     }
   }
 }

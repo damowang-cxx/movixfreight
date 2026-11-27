@@ -41,3 +41,9 @@ test('取消结果未知优先于旧的已完成面单任务，不能错误显�
   assert.equal(result.status, 'UNKNOWN');
   assert.equal(result.retryAllowed, false);
 });
+
+test('建单结果未知时显示人工核查说明且禁止重试', () => {
+  const result = service().dispatchSummary({ shipmentStatus: ShipmentStatus.UNKNOWN, labels: [], dispatchJob: { status: ShipmentDispatchJobStatus.UNKNOWN, publicMessage: '请按系统订单号向渠道商核查，勿重复提交。' } }, false);
+  assert.equal(result.message, '请按系统订单号向渠道商核查，勿重复提交。');
+  assert.equal(result.retryAllowed, false);
+});

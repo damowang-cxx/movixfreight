@@ -49,6 +49,21 @@ pnpm db:generate
 pnpm dev
 ```
 
+若 Windows 保留了默认的 3000–3002 端口，可在同一个 PowerShell 窗口先设置端口，再运行 `pnpm dev`：
+
+```powershell
+$env:PORT = '3300'
+$env:MOVIX_ADMIN_DEV_PORT = '3301'
+$env:MOVIX_CUSTOMER_DEV_PORT = '3302'
+$env:VITE_DEV_API_TARGET = 'http://127.0.0.1:3300'
+$env:DISPATCH_WORKER_ENABLED = 'true'
+pnpm dev
+```
+
+此时管理员端为 `http://127.0.0.1:3301`，客户端为 `http://127.0.0.1:3302`，API 为 `http://127.0.0.1:3300`。
+面单由 API 内的 Worker 从 Redis 队列领取；若将 `DISPATCH_WORKER_ENABLED` 设为 `false`，订单会停留在等待面单状态。
+启动日志应出现“面单任务队列与 Worker 已连接 Redis”。如果只看到“当前实例不执行 Worker”，请在启动 `pnpm dev` 的同一 PowerShell 窗口设置 `$env:DISPATCH_WORKER_ENABLED = 'true'` 并重启；环境变量不会让已运行的 API 进程即时改变。
+
 本地 PostgreSQL 映射到 `localhost:15432`，避免与开发机默认的 `5432` 冲突。启动后可访问：
 
 - 管理员端：`http://localhost:3001`

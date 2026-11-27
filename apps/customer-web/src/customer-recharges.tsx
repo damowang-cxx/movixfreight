@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Card, Image, Modal, Space, Table, Tag, Typography, message } from 'antd';
 import { WalletOutlined } from '@ant-design/icons';
+import { showOperationError } from './error-dialog';
 
 type Request = (path: string, options?: RequestInit) => Promise<Response>;
 type Recharge = { ledgerId: string; ledgerNo: string; currency: string; amount: string; balanceAfter: string; reason: string; createdAt: string; receipt: { fileName: string } | null };
-const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败';
 
 export function CustomerRecharges({ request }: { request: Request }) {
   const [rows, setRows] = useState<Recharge[]>([]);
@@ -17,7 +17,7 @@ export function CustomerRecharges({ request }: { request: Request }) {
       const page = await (await request(`/customer/v1/recharges${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)).json();
       setRows((current) => cursor ? [...current, ...page.items] : page.items);
       setNextCursor(page.nextCursor);
-    } catch (error) { message.error(errorText(error)); }
+    } catch (error) { showOperationError(error); }
     finally { setLoading(false); }
   }, [request]);
   useEffect(() => { void load(); }, [load]);
@@ -26,7 +26,7 @@ export function CustomerRecharges({ request }: { request: Request }) {
     try {
       const blob = await (await request(`/customer/v1/recharges/${ledgerId}/receipt`)).blob();
       setPreview(URL.createObjectURL(blob));
-    } catch (error) { message.error(errorText(error)); }
+    } catch (error) { showOperationError(error); }
   };
   return <Card className="customer-section" title={<Space><WalletOutlined />充值历史</Space>} extra={<Space><Typography.Text type="secondary">可按流水号核对每次入账与水单</Typography.Text><Button size="small" loading={loading} onClick={() => void load()}>刷新</Button></Space>}>
     <Table size="small" rowKey="ledgerId" loading={loading} dataSource={rows} pagination={false} scroll={{ x: 780 }} locale={{ emptyText: '暂无充值记录；如已转账，请联系管理员核对到账情况' }} columns={[

@@ -1,0 +1,25 @@
+{
+  "recipientName": "TEST RECIPIENT",
+  "recipientPhone": "07123456789",
+  "recipientPostcode": "SW1A 1AA",
+  "recipientCity": "London",
+  "recipientAddressLine1": "1 Test Street",
+  "recipientAddressLine2": "",
+  "boxes": [
+    {
+      "weightKg": "1.000",
+      "lengthCm": "20",
+      "widthCm": "15",
+      "heightCm": "10",
+      "items": [
+        {
+          "englishName": "dress",
+          "harmonizedCode": "011100",
+          "quantity": 1,
+          "unitDeclaredValue": "1.00",
+          "declaredValueCurrency": "EUR"
+        }
+      ]
+    }
+  ]
+}

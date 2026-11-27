@@ -72,10 +72,10 @@ export function routeFieldSchema(driverCode: string, customsMode: string, fieldC
   const commodityRequired = driverCode === 'FEDEX_RELAY' && customsMode === 'COMMODITIES';
   const preset = driverCode === 'FEDEX_RELAY' ? fedexRoutePreset(routeType ?? '') : undefined;
   return {
-    addressLineLimit: driverCode === 'UPS_OFFICIAL' ? 35 : 20,
+    addressLineLimit: driverCode === 'UPS_OFFICIAL' ? 35 : driverCode === 'DPD_RELAY_UK' ? 30 : 20,
     shipmentOptions: options,
     customsMode,
-    declarationRequired: commodityRequired ? ['englishName', 'itemWeightKg', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : driverCode === 'UPS_OFFICIAL' ? ['englishName'] : [],
+    declarationRequired: commodityRequired ? ['englishName', 'itemWeightKg', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : driverCode === 'DPD_RELAY_UK' ? ['englishName', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : driverCode === 'UPS_OFFICIAL' ? ['englishName'] : [],
     carrierRules: preset ? {
       serviceTypeLocked: preset.carrierServiceType,
       packageMaxWeightKg: preset.packageMaxWeightKg ?? null,
@@ -96,6 +96,17 @@ export function routeFieldSchema(driverCode: string, customsMode: string, fieldC
 }
 
 export const connectorDrivers: ConnectorDriverDefinition[] = [
+  {
+    code: 'DPD_RELAY_UK', name: 'DPD 英国本土（渠道商接口）', carrierCodes: ['DPD'],
+    description: '通过渠道商 Awbentry 接口创建英国本土单件运单；需配置账号、DPD 服务代码和固定英国发件仓。',
+    capabilities: { autoCreate: true, cancel: true, addressLineLimit: 30, perBoxLabels: true },
+    serviceModeField: 'allowedServiceModes',
+    allowedCountryCodes: ['GB'],
+    businessFields: [
+      { key: 'allowedServiceModes', label: '服务可选件数模式', type: 'MULTI_SELECT', defaultValue: ['SINGLE_ONLY'], options: [{ value: 'SINGLE_ONLY', label: '仅一件' }] },
+      { key: 'actualDataSource', label: '实际数据来源', type: 'SELECT', defaultValue: ActualDataSource.BILL_EXCEL_IMPORT, options: [{ value: ActualDataSource.BILL_EXCEL_IMPORT, label: '供应商账单导入' }] },
+    ],
+  },
   {
     allowedCountryCodes: UPS_EU_COUNTRIES,
     code: 'UPS_OFFICIAL', name: 'UPS 官方接口', carrierCodes: ['UPS'],

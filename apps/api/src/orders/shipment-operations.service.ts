@@ -2,11 +2,12 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { PrismaService } from '../database/prisma.service';
 import { FedexValidationService } from './fedex-validation.service';
 import { UpsShipmentService } from './ups-shipment.service';
+import { DpdShipmentService } from './dpd-shipment.service';
 import { getConnectorDriver } from '../connectors/connector-drivers.registry';
 
 @Injectable()
 export class ShipmentOperationsService {
-  constructor(private readonly prisma: PrismaService, private readonly fedex: FedexValidationService, private readonly ups: UpsShipmentService) {}
+  constructor(private readonly prisma: PrismaService, private readonly fedex: FedexValidationService, private readonly ups: UpsShipmentService, private readonly dpd?: DpdShipmentService) {}
   private async handler(id: string, operation: 'autoCreate' | 'cancel') {
     const order = await this.prisma.order.findUnique({ where: { id }, include: { service: { include: { supplier: true } } } });
     if (!order) throw new NotFoundException('订单不存在');
@@ -15,6 +16,7 @@ export class ShipmentOperationsService {
     if (!getConnectorDriver(supplier.driverCode)?.capabilities[operation]) throw new ConflictException('当前供应商尚不支持此操作');
     if (supplier.driverCode === 'UPS_OFFICIAL') return this.ups;
     if (supplier.driverCode === 'FEDEX_RELAY') return this.fedex;
+    if (supplier.driverCode === 'DPD_RELAY_UK' && this.dpd) return this.dpd;
     throw new ConflictException('此驱动尚未注册操作执行器');
   }
   async create(id: string, onStage?: (stage: 'VALIDATING' | 'CREATING') => Promise<void>) { return (await this.handler(id, 'autoCreate')).create(id, onStage); }

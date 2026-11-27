@@ -21,7 +21,8 @@ function characterCount(value: string) {
  * cannot bypass the carrier's 20-character line limit with a long address_1.
  */
 export function normalizeRecipientAddress(parts: Array<string | null | undefined>, driverCode = 'FEDEX_RELAY'): NormalizedRecipientAddress {
-  const lineLimit = driverCode === 'UPS_OFFICIAL' ? 35 : RECIPIENT_ADDRESS_LINE_LIMIT;
+  const lineLimit = driverCode === 'UPS_OFFICIAL' ? 35 : driverCode === 'DPD_RELAY_UK' ? 30 : RECIPIENT_ADDRESS_LINE_LIMIT;
+  const lineCount = driverCode === 'DPD_RELAY_UK' ? 2 : RECIPIENT_ADDRESS_LINE_COUNT;
   const raw = parts
     .map((part) => typeof part === 'string' ? part.trim() : '')
     .filter(Boolean)
@@ -46,8 +47,8 @@ export function normalizeRecipientAddress(parts: Array<string | null | undefined
     }
     lines.push(current);
     current = word;
-    if (lines.length >= RECIPIENT_ADDRESS_LINE_COUNT) {
-      throw new BadRequestException(`收件地址超过 ${driverCode === 'UPS_OFFICIAL' ? 'UPS' : 'FedEx'} 限制：最多 ${RECIPIENT_ADDRESS_LINE_COUNT} 段、每段 ${lineLimit} 个字符`);
+    if (lines.length >= lineCount) {
+      throw new BadRequestException(`收件地址超过 ${driverCode === 'UPS_OFFICIAL' ? 'UPS' : driverCode === 'DPD_RELAY_UK' ? 'DPD' : 'FedEx'} 限制：最多 ${lineCount} 段、每段 ${lineLimit} 个字符`);
     }
   }
   if (current) lines.push(current);

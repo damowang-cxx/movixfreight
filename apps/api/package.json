@@ -12,7 +12,8 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:migrate-cost-tables": "tsx prisma/migrate-cost-tables.ts",
     "prisma:backfill-recipient-addresses": "tsx prisma/backfill-recipient-addresses.ts",
-    "prisma:migrate-cost-postcode-columns": "prisma db execute --schema prisma/schema.prisma --file prisma/migrate-cost-postcode-columns.sql"
+    "prisma:migrate-cost-postcode-columns": "prisma db execute --schema prisma/schema.prisma --file prisma/migrate-cost-postcode-columns.sql",
+    "dpd:test": "tsx scripts/test-dpd-relay.ts"
   },
   "dependencies": {
     "@movix/pricing-engine": "workspace:*",

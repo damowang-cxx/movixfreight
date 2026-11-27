@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ClipboardEvent } from 'react';
 import { DownloadOutlined, PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Col, Form, Image, Input, Modal, Row, Select, Space, Table, Tag, Typography, Upload, message } from 'antd';
+import { errorText, showOperationError } from './error-dialog';
 
 type Request = (path: string, options?: RequestInit) => Promise<Response>;
 type Recharge = { ledgerId: string; ledgerNo: string; currency: 'EUR' | 'GBP'; amount: string; balanceBefore: string; balanceAfter: string; reason: string; createdAt: string; operatorName?: string; receipt: { id: string; fileName: string; mimeType: string; byteSize: number; sha256: string } | null };
 type Props = { customer: any; canAdjust: boolean; request: Request; onSaved: () => Promise<void> };
-const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败';
 
 export function RechargePanel({ customer, canAdjust, request, onSaved }: Props) {
   const [form] = Form.useForm();
@@ -26,7 +26,7 @@ export function RechargePanel({ customer, canAdjust, request, onSaved }: Props) 
       const page = await (await request(path)).json();
       setHistory((current) => cursor ? [...current, ...page.items] : page.items);
       setNextCursor(page.nextCursor);
-    } catch (error) { message.error(errorText(error)); }
+    } catch (error) { showOperationError(error); }
     finally { setLoading(false); }
   }, [customer.id, request]);
   useEffect(() => { void loadHistory(); }, [loadHistory]);
@@ -38,8 +38,8 @@ export function RechargePanel({ customer, canAdjust, request, onSaved }: Props) 
   useEffect(() => () => { if (imagePreview) URL.revokeObjectURL(imagePreview); }, [imagePreview]);
 
   const chooseProof = (file: File) => {
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { message.error('请选择 PNG、JPG 或 WebP 水单图片'); return; }
-    if (!file.size || file.size > 5 * 1024 * 1024) { message.error('水单图片不能超过 5 MB，且不能为空'); return; }
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { showOperationError('请选择 PNG、JPG 或 WebP 水单图片', '水单上传失败'); return; }
+    if (!file.size || file.size > 5 * 1024 * 1024) { showOperationError('水单图片不能超过 5 MB，且不能为空', '水单上传失败'); return; }
     setProof(file);
   };
   const pasteProof = (event: ClipboardEvent<HTMLDivElement>) => {
@@ -74,7 +74,7 @@ export function RechargePanel({ customer, canAdjust, request, onSaved }: Props) 
         const anchor = document.createElement('a'); anchor.href = url; anchor.download = entry.receipt?.fileName ?? `${entry.ledgerNo}.png`; anchor.click();
         window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
       } else setImagePreview(url);
-    } catch (error) { message.error(errorText(error)); }
+    } catch (error) { showOperationError(error); }
   };
   const wallet = (currency: string) => customer.wallets?.find((item: any) => item.currency === currency)?.balance ?? '0.00';
 

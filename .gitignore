@@ -11,4 +11,6 @@ coverage/
 apps/api/prisma/dev.db
 /tmp/*.dump
 /tmp/open-api-test/
+/tmp/dpd-relay-tests/
+config/dpd-test-order.local.json
 /infra/scripts/__pycache__/

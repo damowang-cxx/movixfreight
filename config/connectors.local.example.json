@@ -74,6 +74,34 @@
     "baseUrl": "",
     "apiKey": ""
   },
+  "dpdRelay": {
+    "profiles": {
+      "DPD_RELAY_UK_01": {
+        "enabled": false,
+        "environment": "production",
+        "baseUrl": "http://ajww.xpresion.in",
+        "allowInsecureHttp": false,
+        "ukDomesticConfirmed": false,
+        "userId": "填写渠道用户名",
+        "password": "填写渠道密码",
+        "customerCode": "填写渠道客户代码",
+        "vendorName": "AJERDPD",
+        "serviceName": "DPD Next Day",
+        "shipper": {
+          "name": "",
+          "contact": "AVA",
+          "address1": "Unit 2 horton instrial park",
+          "address2": "horton road",
+          "city": "west drayton",
+          "state": "London",
+          "postcode": "UB78JD",
+          "telephone": "",
+          "mobile": "",
+          "email": "Ava@epix-logistics.com"
+        }
+      }
+    }
+  },
   "dhl": {
     "enabled": false,
     "environment": "sandbox",

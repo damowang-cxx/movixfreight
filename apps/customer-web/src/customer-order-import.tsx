@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Alert, Button, Card, Divider, Modal, Space, Table, Tag, Typography, Upload, message } from 'antd';
 import { DownloadOutlined, UploadOutlined } from '@ant-design/icons';
+import { errorText, showOperationError } from './error-dialog';
 
 type ImportResult = { rowNo: number; status: 'READY' | 'ALREADY_CREATED' | 'CREATED' | 'ERROR'; currency?: string; estimatedReceivable?: string; orderNo?: string; labelStatus?: string; message?: string; error?: string };
 type ImportRow = { rowNo: number; serviceCode: string; order: Record<string, any> };
@@ -8,7 +9,6 @@ type Props = { services: { code: string; name: string }[]; request: (path: strin
 
 const headers = ['导入订单号', '服务代码', '收件人', '收件公司', '收件电话', '国家', '邮编', '城市', '省/州', '地址', '是否住宅地址', '预估收费重(kg)', '箱号', '实重(kg)', '长(cm)', '宽(cm)', '高(cm)', '中文品名', '英文品名', '材质', '商品净重(kg)', '原产国', 'HS编码', '数量', '单件申报货值', '申报币种'];
 const value = (record: Record<string, unknown>, key: string) => String(record[key] ?? '').trim();
-const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败';
 
 async function downloadTemplate(services: Props['services']) {
   const XLSX = await import('xlsx');
@@ -108,8 +108,10 @@ export function CustomerOrderImport({ services, request, onDone }: Props) {
       setRows(parsed.rows); setSourceFileName(file.name);
       setResults([...parsed.errors, ...preview].sort((a, b) => a.rowNo - b.rowNo));
       setValidated(parsed.errors.length === 0 && preview.length === parsed.rows.length && preview.every((item) => ['READY', 'ALREADY_CREATED'].includes(item.status)));
-      message.success(`已读取 ${records.length} 行，聚合为 ${parsed.rows.length} 票订单`);
-    } catch (error) { message.error(errorText(error)); } finally { setBusy(false); }
+      const failures = [...parsed.errors, ...preview.filter((item) => !['READY', 'ALREADY_CREATED'].includes(item.status))];
+      if (failures.length) showOperationError(failures.slice(0, 5).map((item) => `第 ${item.rowNo} 行：${item.error ?? item.message ?? '请检查该订单'}`).join('\n'), 'Excel 预校验未通过', '请按下方结果表逐行修改，再重新预校验。');
+      else message.success(`已读取 ${records.length} 行，聚合为 ${parsed.rows.length} 票订单`);
+    } catch (error) { showOperationError(error); } finally { setBusy(false); }
   };
   const ready = rows.length > 0 && validated && !committed;
   const commit = () => Modal.confirm({
@@ -122,7 +124,8 @@ export function CustomerOrderImport({ services, request, onDone }: Props) {
         const result = await (await request('/customer/v1/orders/import/commit', { method: 'POST', body: JSON.stringify({ sourceFileName, rows }) })).json() as ImportResult[];
         setResults(result); setCommitted(result.every((item) => item.status === 'CREATED'));
         const created = result.filter((item) => item.status === 'CREATED').length;
-        Modal.info({ title: 'Excel 导入结果', content: `成功 ${created} 票，失败 ${result.length - created} 票。成功订单已预扣并等待面单生成；请在订单列表查看后续状态。`, okText: '我知道了' });
+        const failures = result.filter((item) => item.status !== 'CREATED');
+        Modal[failures.length ? 'warning' : 'info']({ title: failures.length ? '部分订单导入失败' : 'Excel 导入结果', content: <Space direction="vertical"><div>成功 {created} 票，失败 {failures.length} 票。成功订单已预扣并等待面单生成。</div>{failures.slice(0, 5).map((item) => <div key={item.rowNo}>第 {item.rowNo} 行：{item.error ?? item.message ?? '请检查该订单'}</div>)}{failures.length > 5 && <div>其余失败原因请在下方结果表查看。</div>}</Space>, okText: '我知道了' });
         await onDone();
       } catch (error) { Modal.error({ title: '导入未完成', content: errorText(error), okText: '我知道了' }); }
       finally { setBusy(false); }
@@ -131,7 +134,7 @@ export function CustomerOrderImport({ services, request, onDone }: Props) {
   return <div className="customer-import">
     <Alert showIcon type="info" message="先解析预览，确认后才扣费" description="模板中每行是一条货品明细；相同导入订单号合并为一票。只有全部预校验通过才能提交。重复提交同一文件内容不会重复扣费。" />
     <div className="customer-import__actions">
-      <Space wrap><Button icon={<DownloadOutlined />} onClick={() => { void downloadTemplate(services).catch((error) => message.error(errorText(error))); }}>下载 Excel 模板</Button><Upload accept=".xlsx,.xls" maxCount={1} showUploadList={false} beforeUpload={(file) => { void parseFile(file); return false; }}><Button type="primary" icon={<UploadOutlined />} loading={busy}>选择并预校验</Button></Upload><Button disabled={!ready || busy} onClick={commit}>{results.some((item) => item.status === 'CREATED') ? '重试未成功订单' : `确认创建 ${rows.length || ''} 票订单`}</Button></Space>
+      <Space wrap><Button icon={<DownloadOutlined />} onClick={() => { void downloadTemplate(services).catch((error) => showOperationError(error)); }}>下载 Excel 模板</Button><Upload accept=".xlsx,.xls" maxCount={1} showUploadList={false} beforeUpload={(file) => { void parseFile(file); return false; }}><Button type="primary" icon={<UploadOutlined />} loading={busy}>选择并预校验</Button></Upload><Button disabled={!ready || busy} onClick={commit}>{results.some((item) => item.status === 'CREATED') ? '重试未成功订单' : `确认创建 ${rows.length || ''} 票订单`}</Button></Space>
       {sourceFileName && <Typography.Text type="secondary">当前文件：{sourceFileName}</Typography.Text>}
     </div>
     <Card size="small" className="customer-import__services" title="可用服务代码"><Space wrap>{services.length ? services.map((service) => <Tag key={service.code}>{service.name} · {service.code}</Tag>) : <Typography.Text type="secondary">暂无可下单服务</Typography.Text>}</Space></Card>

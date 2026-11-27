@@ -17,7 +17,7 @@ export default defineConfig({
   // 仅开发服务器使用；生产环境仍由宿主机 Nginx 将 /api/ 转发给 NestJS。
   server: {
     host: '127.0.0.1',
-    port: 3001,
+    port: Number(process.env.MOVIX_ADMIN_DEV_PORT ?? 3001),
     strictPort: true,
     proxy: {
       '/api': {

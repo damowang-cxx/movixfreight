@@ -7,6 +7,7 @@ import { IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, Matches, Min, 
 import { CurrentUser, RequireAdminRoles } from '../auth/decorators';
 import type { AuthPrincipal } from '../auth/auth.types';
 import { ShipmentOperationsService } from './shipment-operations.service';
+import { DpdShipmentService } from './dpd-shipment.service';
 import { FedexValidationService } from './fedex-validation.service';
 import { OrdersService } from './orders.service';
 import { LabelPdfService } from './label-pdf.service';
@@ -23,7 +24,7 @@ class ImportOrdersDto { @IsString() sourceFileName!: string; @IsArray() @Validat
 @RequireAdminRoles(AdminRole.SUPER_ADMIN, AdminRole.OPERATIONS)
 @Controller('admin/v1/orders')
 export class OrdersAdminController {
-  constructor(private readonly fedex: FedexValidationService, private readonly orders: OrdersService, private readonly labelPdf: LabelPdfService, private readonly operations: ShipmentOperationsService, private readonly tracking: TrackingService) {}
+  constructor(private readonly fedex: FedexValidationService, private readonly orders: OrdersService, private readonly labelPdf: LabelPdfService, private readonly operations: ShipmentOperationsService, private readonly tracking: TrackingService, private readonly dpd: DpdShipmentService) {}
   @Get()
   list() { return this.orders.listForAdmin(); }
   @Get('orderable-suppliers') orderableSuppliers() { return this.orders.orderableSuppliers(true); }
@@ -48,6 +49,8 @@ export class OrdersAdminController {
   createFedex(@Param('orderId') orderId: string) { return this.fedex.create(orderId); }
   @Post(':orderId/cancel')
   cancel(@Param('orderId') orderId: string, @CurrentUser() operator: AuthPrincipal) { return this.operations.cancel(orderId, operator.sub); }
+  @Post(':orderId/dpd/print')
+  printDpd(@Param('orderId') orderId: string) { return this.dpd.reprint(orderId); }
   @Post(':orderId/fedex/cancel')
   cancelFedex(@Param('orderId') orderId: string, @CurrentUser() operator: AuthPrincipal) { return this.fedex.cancel(orderId, operator.sub); }
   @Get(':orderId/labels/:labelId/inline')

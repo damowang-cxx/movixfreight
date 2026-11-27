@@ -11,7 +11,8 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "db:generate": "pnpm --filter @movix/api prisma:generate",
-    "db:migrate": "pnpm --filter @movix/api prisma:migrate"
+    "db:migrate": "pnpm --filter @movix/api prisma:migrate",
+    "dpd:test": "pnpm --filter @movix/api dpd:test"
   },
   "devDependencies": {
     "turbo": "^2.5.6"

@@ -4,13 +4,14 @@ import { PrismaService } from '../database/prisma.service';
 import { UpsOfficialConfig } from '../connectors/ups-official.config';
 import { UPS_EU_COUNTRIES } from '../connectors/connector-drivers.registry';
 import { FedexRelayConfig } from '../connectors/fedex-relay.config';
+import { DpdRelayConfig } from '../connectors/dpd-relay.config';
 import { connectorDrivers, fedexRoutePreset, getConnectorDriver, normalizeBusinessConfig, normalizeRouteFieldConfig, routeFieldSchema } from '../connectors/connector-drivers.registry';
 
 type SupplierInput = { carrierId: string; code: string; name: string; driverCode: string; environment: ChannelEnvironment; actualDataSource?: ActualDataSource; businessConfig?: Record<string, unknown> };
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService, private readonly fedexConfig: FedexRelayConfig, private readonly upsConfig: UpsOfficialConfig) {}
+  constructor(private readonly prisma: PrismaService, private readonly fedexConfig: FedexRelayConfig, private readonly upsConfig: UpsOfficialConfig, private readonly dpdConfig?: DpdRelayConfig) {}
 
   async connectorDrivers() {
     const suppliers = await this.prisma.supplier.findMany({ select: { code: true, name: true, driverCode: true, environment: true } });
@@ -20,7 +21,7 @@ export class ProductsService {
     });
   }
   private connectionStatus(supplier: { code: string; driverCode: string; environment: string }) {
-    const status = supplier.driverCode === 'UPS_OFFICIAL' ? this.upsConfig.status(supplier.code) : supplier.driverCode === 'FEDEX_RELAY' ? this.fedexConfig.status(supplier.code, supplier.environment === 'PRODUCTION') : { configured: false, environment: null };
+    const status = supplier.driverCode === 'UPS_OFFICIAL' ? this.upsConfig.status(supplier.code) : supplier.driverCode === 'FEDEX_RELAY' ? this.fedexConfig.status(supplier.code, supplier.environment === 'PRODUCTION') : supplier.driverCode === 'DPD_RELAY_UK' ? this.dpdConfig?.status(supplier.code) ?? { configured: false, environment: null } : { configured: false, environment: null };
     const environmentMatches = status.environment?.toUpperCase() === supplier.environment;
     return { ...status, configured: status.configured && environmentMatches, environmentMatches };
   }
@@ -116,6 +117,7 @@ export class ProductsService {
     const supplier = await this.prisma.supplier.findFirst({ where: { id: supplierId, enabled: true, carrier: { enabled: true }, ...(allowSandbox ? {} : { environment: ChannelEnvironment.PRODUCTION }) }, include: { carrier: true, services: { where: { enabled: true }, select: { id: true, code: true, name: true, currency: true, measurementMethod: true, allowsMultiPiece: true, minPieces: true } }, countryRoutes: { where: { enabled: true, countries: { some: { countryCode } } }, include: { countries: true, service: true } } } });
     if (!supplier) throw new NotFoundException('供应商不存在、已停用或当前环境不可下单');
     const upsProfile = supplier.driverCode === 'UPS_OFFICIAL' ? this.upsConfig.connection(supplier.code, supplier.environment) : undefined;
+    const dpdProfile = supplier.driverCode === 'DPD_RELAY_UK' ? this.dpdConfig?.connection(supplier.code, supplier.environment) : undefined;
     const unifiedService = this.resolveFedexUnifiedService(supplier.driverCode, supplier.services);
     if (supplier.countryRoutes.length !== 1) throw new ConflictException(supplier.countryRoutes.length ? `供应商 ${supplier.name} 在 ${countryCode} 存在多个可用国家路由，请修正路由配置` : `供应商 ${supplier.name} 暂未配置 ${countryCode} 的国家路由`);
     const route = supplier.countryRoutes[0]!;
@@ -123,7 +125,13 @@ export class ProductsService {
     if (route.service.supplierId !== supplier.id) throw new ConflictException('国家路由绑定的内部计价服务不属于当前供应商');
     if (unifiedService && route.serviceId !== unifiedService.id) throw new ConflictException('FedEx 国家路由未绑定供应商唯一的统一计价服务，请在供应商详情重新保存路由');
     if (supplier.driverCode === 'UPS_OFFICIAL' && (!UPS_EU_COUNTRIES.includes(countryCode) || route.carrierServiceType !== '11' || route.customsMode !== 'NONE' || (route.fieldConfig as any)?.shipmentOptions?.length)) throw new ConflictException('UPS 路由仅支持已配置欧盟目的国 Standard、无清关及无特殊物品选项');
-    return { destinationCountryCode: countryCode, shipperCountryCode: upsProfile?.shipper.countryCode, accountFingerprint: upsProfile ? this.upsConfig.accountFingerprint(upsProfile) : undefined, supplier: { id: supplier.id, code: supplier.code, name: supplier.name, environment: supplier.environment, driverCode: supplier.driverCode, carrier: supplier.carrier }, route: { id: route.id, code: route.code, name: route.name, routeType: route.routeType, carrierServiceType: route.carrierServiceType, countryCodes: route.countries.map((item) => item.countryCode), fieldSchema: routeFieldSchema(supplier.driverCode, route.customsMode, route.fieldConfig as Record<string, unknown>, route.routeType) }, service: { id: route.service.id, code: route.service.code, name: route.service.name, currency: route.service.currency, measurementMethod: route.service.measurementMethod, allowsMultiPiece: route.service.allowsMultiPiece, minPieces: route.service.minPieces } };
+    if (supplier.driverCode === 'DPD_RELAY_UK') {
+      if (countryCode !== 'GB') throw new ConflictException('DPD 英国本土仅支持 GB 目的国');
+      if (route.routeType !== 'DEFAULT' || route.customsMode !== 'NONE' || (route.fieldConfig as any)?.shipmentOptions?.length) throw new ConflictException('DPD 英国本土路由必须为 DEFAULT，且不启用跨境清关或特殊选项');
+      if (route.service.allowsMultiPiece || route.service.minPieces !== 1) throw new ConflictException('DPD 英国本土服务必须设置为一票一件');
+      if (!route.carrierServiceType || route.carrierServiceType.length > 5) throw new ConflictException('DPD 路由 ProductCode 必须填写文档中的产品代码（最长 5 字符），不能填写产品名称或连接编号');
+    }
+    return { destinationCountryCode: countryCode, shipperCountryCode: upsProfile?.shipper.countryCode ?? (dpdProfile ? 'GB' : undefined), accountFingerprint: upsProfile ? this.upsConfig.accountFingerprint(upsProfile) : dpdProfile ? this.dpdConfig?.accountFingerprint(dpdProfile) : undefined, supplier: { id: supplier.id, code: supplier.code, name: supplier.name, environment: supplier.environment, driverCode: supplier.driverCode, carrier: supplier.carrier }, route: { id: route.id, code: route.code, name: route.name, routeType: route.routeType, carrierServiceType: route.carrierServiceType, countryCodes: route.countries.map((item) => item.countryCode), fieldSchema: routeFieldSchema(supplier.driverCode, route.customsMode, route.fieldConfig as Record<string, unknown>, route.routeType) }, service: { id: route.service.id, code: route.service.code, name: route.service.name, currency: route.service.currency, measurementMethod: route.service.measurementMethod, allowsMultiPiece: route.service.allowsMultiPiece, minPieces: route.service.minPieces } };
   }
   /** Resolve an externally selected service without exposing its supplier connection. */
   async resolvePublicServiceRoute(serviceId: string, countryInput: string) {
@@ -158,6 +166,8 @@ export class ProductsService {
       throw new BadRequestException('FedEx Relay 的税务、贸易条款、报关、清关和物品属性映射尚未在驱动中确认；当前国家路由不能启用这些字段');
     }
     if (supplier.driverCode === 'UPS_OFFICIAL' && (data.routeType !== 'DEFAULT' || countries.some(code => !UPS_EU_COUNTRIES.includes(code)) || fieldConfig.shipmentOptions.length)) throw new BadRequestException('UPS 首期只支持 Standard 默认路由、欧盟国家，不支持税务贸易或特殊物品选项');
+    if (supplier.driverCode === 'DPD_RELAY_UK' && (data.routeType !== 'DEFAULT' || countries.length !== 1 || countries[0] !== 'GB' || fieldConfig.shipmentOptions.length || (data.customsMode && data.customsMode !== 'NONE'))) throw new BadRequestException('DPD 英国本土仅允许 GB 默认路由，不支持跨境清关和特殊选项');
+    if (supplier.driverCode === 'DPD_RELAY_UK' && (!data.carrierServiceType?.trim() || data.carrierServiceType.trim().length > 5)) throw new BadRequestException('DPD 路由 ProductCode 最长 5 字符；普通国内货物文档列出 NDOC，不要填写产品名称或连接编号');
     const preset = supplier.driverCode === 'FEDEX_RELAY' ? fedexRoutePreset(data.routeType) : supplier.driverCode === 'UPS_OFFICIAL' ? { carrierServiceType: '11', customsMode: 'NONE' } : undefined;
     if (supplier.driverCode === 'FEDEX_RELAY' && !preset) throw new BadRequestException('FedEx Relay 仅支持荷兰本土或泛欧国家路由');
     if (preset && data.carrierServiceType?.trim() && data.carrierServiceType.trim().toUpperCase() !== preset.carrierServiceType) throw new BadRequestException(`${data.routeType} 路由的承运商服务代码已固定为 ${preset.carrierServiceType}`);
@@ -190,6 +200,7 @@ export class ProductsService {
     if (supplier.driverCode === 'FEDEX_RELAY' && await this.prisma.service.count({ where: { supplierId: supplier.id, enabled: true } })) throw new ConflictException('FedEx 供应商连接只能保留一个启用的统一计价服务；请直接维护现有服务，而不要新建第二个服务');
     if (data.billingMethod === BillingMethod.MAX_ACTUAL_OR_VOLUMETRIC && (!data.volumetricDivisor || Number(data.volumetricDivisor) <= 0)) throw new ConflictException('实重与材积重取大时必须设置大于 0 的计抛系数');
     const config = supplier.businessConfig as Record<string, unknown>; const modes = config.allowedServiceModes;
+    if (supplier.driverCode === 'DPD_RELAY_UK' && (data.allowsMultiPiece || (data.minPieces ?? 1) !== 1)) throw new ConflictException('DPD 英国本土首期仅支持一票一件');
     if (Array.isArray(modes) && !modes.includes(data.allowsMultiPiece ? 'MULTI_PIECE' : 'SINGLE_ONLY')) throw new ConflictException('该供应商接口不允许所选件数模式');
     // 新订单的实际承运商 serviceType 由供应商国家路由维护；该字段仅保留给历史订单和未迁移数据兼容。
     return this.prisma.service.create({ data: { ...data, minPieces: data.minPieces ?? 1, chargeableWeightScale: data.chargeableWeightScale ?? 3, remoteFeeEnabled: data.remoteFeeEnabled ?? false } });

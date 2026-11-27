@@ -38,6 +38,7 @@ export class OrdersService {
       : await this.products.resolveOrderRoute(input.supplierId, normalizedInput.recipientCountryCode, Boolean(options.allowSandbox));
     const recipientAddress = normalizeRecipientAddress(input.recipientAddress === undefined ? [input.recipientAddressLine1, input.recipientAddressLine2, input.recipientAddressLine3] : [input.recipientAddress], resolved.supplier.driverCode);
     if (resolved.supplier.driverCode === 'UPS_OFFICIAL') assertUpsInput(normalizedInput);
+    if (resolved.supplier.driverCode === 'DPD_RELAY_UK') this.assertDpdInput(normalizedInput);
     const service = resolved.service;
     this.assertRouteOptions(normalizedInput, resolved.route.fieldSchema);
     await this.assertShipmentInput(normalizedInput, undefined, resolved.route.fieldSchema);
@@ -103,6 +104,7 @@ export class OrdersService {
       ? await this.products.resolvePublicServiceRoute(requestedServiceId, normalized.recipientCountryCode)
       : await this.products.resolveOrderRoute(input.supplierId, normalized.recipientCountryCode, allowSandbox);
     normalizeRecipientAddress(input.recipientAddress === undefined ? [input.recipientAddressLine1, input.recipientAddressLine2, input.recipientAddressLine3] : [input.recipientAddress], resolved.supplier.driverCode);
+    if (resolved.supplier.driverCode === 'DPD_RELAY_UK') this.assertDpdInput(normalized);
     this.assertRouteOptions(normalized, resolved.route.fieldSchema);
     await this.assertShipmentInput(normalized, undefined, resolved.route.fieldSchema);
     if (resolved.supplier.driverCode === 'UPS_OFFICIAL') assertUpsInput(normalized);
@@ -173,6 +175,7 @@ export class OrdersService {
         const previewOrder = { ...row.order, recipientCountryCode: await this.pricing.resolveDestinationCountry(row.order.recipientCountryCode), boxes: this.normalizeBoxNumbers(row.order.boxes, `PREVIEW-${row.rowNo}`) } as CreateOrderInput;
         const resolved = await this.products.resolveOrderRoute(previewOrder.supplierId, previewOrder.recipientCountryCode, true);
         normalizeRecipientAddress(previewOrder.recipientAddress === undefined ? [previewOrder.recipientAddressLine1, previewOrder.recipientAddressLine2, previewOrder.recipientAddressLine3] : [previewOrder.recipientAddress], resolved.supplier.driverCode);
+        if (resolved.supplier.driverCode === 'DPD_RELAY_UK') this.assertDpdInput(previewOrder);
         if (resolved.supplier.driverCode === 'UPS_OFFICIAL') assertUpsInput(previewOrder);
         const service = resolved.service;
         this.assertRouteOptions(previewOrder, resolved.route.fieldSchema);
@@ -256,7 +259,7 @@ export class OrdersService {
     const terminalOrderStatus = order.shipmentStatus;
     const now = Date.now();
     const base = { retryAllowed: false };
-    if (terminalOrderStatus === ShipmentStatus.UNKNOWN) return { ...base, status: 'UNKNOWN', stage: 'UNKNOWN', reasonCode: 'SUPPLIER_RESULT_UNKNOWN', message: '供应商创建或取消结果未知，请人工核查，不要重复打单或自动重试', lastActivityAt: job?.updatedAt ?? null };
+    if (terminalOrderStatus === ShipmentStatus.UNKNOWN) return { ...base, status: 'UNKNOWN', stage: 'UNKNOWN', reasonCode: 'SUPPLIER_RESULT_UNKNOWN', message: job?.status === ShipmentDispatchJobStatus.UNKNOWN && job.publicMessage ? job.publicMessage : '供应商创建或取消结果未知，请人工核查，不要重复打单或自动重试', lastActivityAt: job?.updatedAt ?? null };
     if (terminalOrderStatus === ShipmentStatus.GENERATED && job?.reasonCode === 'LABEL_PROCESSING_FAILED') return { ...base, status: 'FAILED', stage: 'PDF_PROCESSING', reasonCode: 'LABEL_PROCESSING_FAILED', message: '运单已生成，PDF 处理失败；再次预览/下载仅重做本地转换，不会重复打单', lastActivityAt: job.updatedAt };
     if (terminalOrderStatus === ShipmentStatus.GENERATED || (job?.status === ShipmentDispatchJobStatus.COMPLETED && order.labels.length > 0)) return { ...base, status: 'READY', stage: 'READY', message: '面单已生成，可预览或下载 PDF', reasonCode: 'LABEL_READY', lastActivityAt: job?.updatedAt ?? null };
     if (terminalOrderStatus === ShipmentStatus.CANCELLED) return { ...base, status: 'CANCELLED', stage: 'CANCELLED', message: '订单已取消', reasonCode: 'ORDER_CANCELLED', lastActivityAt: job?.updatedAt ?? null };
@@ -269,6 +272,10 @@ export class OrdersService {
     const status = job.status === ShipmentDispatchJobStatus.PENDING ? 'PENDING' : job.status === ShipmentDispatchJobStatus.PROCESSING ? (job.stage === 'CREATING' ? 'CREATING' : 'VALIDATING') : job.status === ShipmentDispatchJobStatus.COMPLETED ? 'READY' : job.status;
     const fallback = status === 'FAILED' ? '面单生成失败，请查看失败原因' : status === 'UNKNOWN' ? '面单生成结果未知，请勿重复下单并联系管理员核查' : status === 'BLOCKED' ? '当前供应商连接暂不支持自动生成面单' : status === 'CREATING' ? '正在向供应商生成面单' : status === 'VALIDATING' ? '正在校验订单信息' : '订单已受理，正在等待面单生成';
     return { ...base, status, stage: job.stage ?? null, message: job.publicMessage ?? fallback, reasonCode: job.reasonCode ?? null, lastActivityAt: job.updatedAt, ...(admin && job.errorMessage ? { technicalDetail: job.errorMessage } : {}) };
+  }
+  private assertDpdInput(input: CreateOrderInput) {
+    if (!input.recipientPhone?.trim() || input.boxes.length !== 1) throw new BadRequestException('DPD 英国本土需要收件电话，且首期仅支持一票一件');
+    if (!input.recipientName?.trim() || Array.from(input.recipientName.trim()).length > 30) throw new BadRequestException('DPD 收件人姓名对应 DestinationName，必须填写且最长 30 字符');
   }
   private async assertShipmentInput(input: CreateOrderInput, driverCode?: string, routeSchema: { declarationRequired?: string[]; carrierRules?: { packageMaxWeightKg?: number | null } } = {}) {
     const required = new Set<string>(await this.settings.requiredDeclarationFields(driverCode));
