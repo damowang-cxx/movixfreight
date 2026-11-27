@@ -59,7 +59,7 @@ export class OpenShipmentDto {
   @ValidateNested() @Type(() => OpenAddressDto) to_address!: OpenAddressDto;
   @IsOptional() @ValidateNested() @Type(() => OpenAddressDto) from_address?: OpenAddressDto;
   @IsArray() @ValidateNested({ each: true }) @Type(() => OpenParcelDto) parcels!: OpenParcelDto[];
-  @IsIn(['EUR', 'GBP']) declaration_currency!: 'EUR' | 'GBP';
+  @IsOptional() @IsIn(['EUR', 'GBP']) declaration_currency?: 'EUR' | 'GBP';
 }
 
 export class CreateOpenShipmentDto {

@@ -7,6 +7,7 @@ import { OrdersService } from './orders.service';
 import { ProductsService } from '../products/products.service';
 import { ShipmentDispatchQueueService } from '../open-api/shipment-dispatch-queue.service';
 import { OpenApiShipmentsService } from '../open-api/open-api-shipments.service';
+import { CreateOpenShipmentDto } from '../open-api/dto/create-open-shipment.dto';
 import { UpsOfficialConfig } from '../connectors/ups-official.config';
 import { profile, upsOrder } from '../../test/ups-fixtures';
 import { routeFieldSchema } from '../connectors/connector-drivers.registry';
@@ -16,14 +17,65 @@ import { validate } from 'class-validator';
 
 function orderHarness() {
   const wallet = { id: 'wallet1', currency: 'EUR', balance: new Prisma.Decimal(100) }; let saved: any; const ledgers: any[] = []; let enqueues = 0; let quotes = 0;
+  const requiredFields = new Set<string>();
   const pricing: any = { resolveDestinationCountry: async (v: string) => v === '荷兰' ? 'NL' : v.toUpperCase(), quote: async () => { quotes++; return { total: '10', currency: 'EUR' }; } };
   const resolved: any = { shipperCountryCode: 'BE', accountFingerprint: 'hash', supplier: { id: 'supplier1', code: 'UPS1', driverCode: 'UPS_OFFICIAL', environment: 'PRODUCTION' }, service: { id: 'service1', code: 'UPS_STANDARD', minPieces: 1, allowsMultiPiece: true, measurementMethod: 'PER_BOX' }, route: { id: 'route1', code: 'STANDARD', routeType: 'DEFAULT', carrierServiceType: '11', fieldSchema: routeFieldSchema('UPS_OFFICIAL', 'NONE', {}) } };
   const products: any = { resolveOrderRoute: async (_id: string, country: string, allowSandbox: boolean) => { if (country !== 'NL' || resolved.supplier.environment === 'SANDBOX' && !allowSandbox) throw new Error('无可用路由'); return resolved; }, resolvePublicServiceRoute: async (_id: string, country: string) => { if (!['NL', '荷兰'].includes(country) || resolved.supplier.environment !== 'PRODUCTION') throw new Error('服务不可用'); return resolved; } };
-  const db: any = { order: { findUnique: async ({ where }: any) => saved?.idempotencyKey === where.idempotencyKey ? saved : null, create: async ({ data }: any) => saved = { id: 'order1', ...data } }, service: { findUnique: async ({ where }: any) => where.code === 'UPS_STANDARD' ? { id: 'service1' } : null }, customer: { findUnique: async () => ({ id: 'customer1', status: 'NORMAL', wallets: [wallet] }) }, customerWallet: { update: async ({ data }: any) => Object.assign(wallet, data) }, walletLedger: { create: async ({ data }: any) => ledgers.push(data) }, $transaction: async (cb: any, options: any) => { assert.equal(options.isolationLevel, 'Serializable'); return cb(db); } };
-  const svc = new OrdersService(db, pricing, { evaluateInTransaction: async () => {} } as any, { requiredDeclarationFields: async () => [] } as any, products, { enqueue: async () => { enqueues++; } } as any);
+  const db: any = { order: { findUnique: async ({ where }: any) => saved?.idempotencyKey === where.idempotencyKey ? saved : null, findUniqueOrThrow: async () => saved, create: async ({ data }: any) => saved = { id: 'order1', ...data } }, service: { findUnique: async ({ where }: any) => where.code === 'UPS_STANDARD' ? { id: 'service1' } : null, findFirst: async () => ({ id: 'service1', supplierId: 'supplier1' }) }, openApiIdempotencyRecord: { findUnique: async () => null, create: async () => ({}) }, customer: { findUnique: async () => ({ id: 'customer1', status: 'NORMAL', wallets: [wallet] }) }, customerWallet: { update: async ({ data }: any) => Object.assign(wallet, data) }, walletLedger: { create: async ({ data }: any) => ledgers.push(data) }, $transaction: async (cb: any, options: any) => { assert.equal(options.isolationLevel, 'Serializable'); return cb(db); } };
+  const svc = new OrdersService(db, pricing, { evaluateInTransaction: async () => {} } as any, { requiredDeclarationFields: async () => [...requiredFields] } as any, products, { enqueue: async () => { enqueues++; } } as any);
   const o = upsOrder(); const input: any = { supplierId: 'supplier1', idempotencyKey: 'key1', recipientName: o.recipientName, recipientPhone: o.recipientPhone, recipientCountryCode: '荷兰', recipientCity: o.recipientCity, recipientPostcode: o.recipientPostcode, recipientAddress: 'ABCDEFGHIJKLMNOPQRSTUVW 12', estimatedChargeableKg: '2', boxes: o.boxes.map(({ id, ...box }) => ({ ...box, boxNo: undefined })) };
-  return { svc, db, products, input, wallet, ledgers, resolved, saved: () => saved, counts: () => ({ enqueues, quotes }) };
+  return { svc, db, products, input, wallet, ledgers, resolved, requiredFields, saved: () => saved, counts: () => ({ enqueues, quotes }) };
 }
+
+test('手工建单、Excel 预校验与提交、Open API 都执行当前全局申报必填配置', async () => {
+  const h = orderHarness();
+  h.requiredFields.add('originCountryCode');
+  await assert.rejects(h.svc.createForCustomer('customer1', h.input), /缺少原产国/);
+  await assert.rejects(h.svc.createForAdmin('customer1', h.input), /缺少原产国/);
+  const adminRow = { rowNo: 2, customerId: 'customer1', order: h.input };
+  assert.match((await h.svc.previewImportForAdmin([adminRow]))[0].error ?? '', /缺少原产国/);
+  assert.match((await h.svc.importForAdmin('orders.xlsx', [adminRow]))[0].error ?? '', /缺少原产国/);
+  const { supplierId: _supplierId, idempotencyKey: _idempotencyKey, ...order } = h.input;
+  const customerRow = { rowNo: 2, serviceCode: 'UPS_STANDARD', order };
+  assert.match((await h.svc.previewImportForCustomer('customer1', 'orders.xlsx', [customerRow]))[0].error ?? '', /缺少原产国/);
+  assert.match((await h.svc.importForCustomer('customer1', 'orders.xlsx', [customerRow]))[0].error ?? '', /缺少原产国/);
+
+  const shipment = { service: 'UPS_STANDARD', parcel_count: 1, declaration_currency: 'EUR', to_address: { name: 'Test Recipient', city: 'Amsterdam', country: 'NL', postcode: '1012JS', tel: '+31207654321', address_1: 'Dam 1' }, parcels: [{ client_weight: 1, client_length: 20, client_width: 15, client_height: 10, declarations: [{ name_en: 'Phone case' }] }] };
+  const open = new OpenApiShipmentsService(h.db, h.svc, { resolveDestinationCountry: async () => 'NL' } as any, {} as any);
+  await assert.rejects(open.create({ customerId: 'customer1' } as any, 'new-key', { shipment } as any), /缺少原产国/);
+  assert.equal(h.saved(), undefined);
+  assert.equal(h.ledgers.length, 0);
+  assert.equal(h.counts().quotes, 0);
+});
+
+test('Open API 申报币种可随系统配置关闭，线路仍可单独要求', async () => {
+  const shipment = { service: 'UPS_STANDARD', parcel_count: 1, to_address: { name: 'Test Recipient', city: 'Amsterdam', country: 'NL', postcode: '1012JS', tel: '+31207654321', address_1: 'Dam 1' }, parcels: [{ client_weight: 1, client_length: 20, client_width: 15, client_height: 10, declarations: [{ name_en: 'Phone case' }] }] };
+  assert.equal((await validate(plainToInstance(CreateOpenShipmentDto, { shipment }), { whitelist: true, forbidNonWhitelisted: true })).length, 0);
+  const h = orderHarness();
+  const open = new OpenApiShipmentsService(h.db, h.svc, { resolveDestinationCountry: async () => 'NL' } as any, {} as any);
+  await open.create({ customerId: 'customer1' } as any, 'currency-optional', { shipment } as any);
+  assert.equal(h.saved().boxes.create[0].items.create[0].declaredValueCurrency, null);
+  const required = orderHarness(); required.requiredFields.add('declaredValueCurrency');
+  await assert.rejects(required.svc.createForCustomer('customer1', required.input), /缺少申报币种/);
+  const routeRequired = orderHarness(); routeRequired.resolved.route.fieldSchema.declarationRequired.push('declaredValueCurrency');
+  await assert.rejects(routeRequired.svc.createForCustomer('customer1', routeRequired.input), /缺少申报币种/);
+});
+
+test('系统设置中的每个可配置申报字段都在建单前校验', async () => {
+  const fields: Array<[string, string]> = [['chineseName', '中文品名'], ['englishName', '英文品名'], ['material', '材质'], ['originCountryCode', '原产国'], ['harmonizedCode', 'HS 编码'], ['quantity', '申报数量'], ['unitDeclaredValue', '申报单价'], ['declaredValueCurrency', '申报币种']];
+  for (const [field, label] of fields) {
+    const h = orderHarness();
+    h.requiredFields.add(field);
+    h.resolved.supplier.driverCode = 'TEST_DRIVER';
+    h.input.recipientAddress = 'Dam 1';
+    const item: any = { chineseName: '样品', englishName: 'Sample', material: 'Plastic', originCountryCode: 'CN', harmonizedCode: '392690', quantity: 1, unitDeclaredValue: '1.00', declaredValueCurrency: 'EUR' };
+    delete item[field];
+    h.input.boxes[0].items = [item];
+    await assert.rejects(h.svc.createForCustomer('customer1', h.input), (error: any) => error.message.includes(label), field);
+    assert.equal(h.saved(), undefined);
+    assert.equal(h.counts().quotes, 0);
+  }
+});
 test('admin, portal and Excel use same UPS preflight, normalized address, precharge and one durable task', async () => {
   for (const entry of ['admin', 'portal', 'excel']) {
     const h = orderHarness();

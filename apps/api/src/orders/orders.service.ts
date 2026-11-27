@@ -41,7 +41,7 @@ export class OrdersService {
     if (resolved.supplier.driverCode === 'DPD_RELAY_UK') this.assertDpdInput(normalizedInput);
     const service = resolved.service;
     this.assertRouteOptions(normalizedInput, resolved.route.fieldSchema);
-    await this.assertShipmentInput(normalizedInput, undefined, resolved.route.fieldSchema);
+    await this.assertShipmentInput(normalizedInput, resolved.route.fieldSchema);
     if (!service.allowsMultiPiece && normalizedInput.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
     if (normalizedInput.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
     const quoteWeights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [normalizedInput.estimatedChargeableKg] : normalizedInput.boxes.map((box) => box.weightKg);
@@ -106,7 +106,7 @@ export class OrdersService {
     normalizeRecipientAddress(input.recipientAddress === undefined ? [input.recipientAddressLine1, input.recipientAddressLine2, input.recipientAddressLine3] : [input.recipientAddress], resolved.supplier.driverCode);
     if (resolved.supplier.driverCode === 'DPD_RELAY_UK') this.assertDpdInput(normalized);
     this.assertRouteOptions(normalized, resolved.route.fieldSchema);
-    await this.assertShipmentInput(normalized, undefined, resolved.route.fieldSchema);
+    await this.assertShipmentInput(normalized, resolved.route.fieldSchema);
     if (resolved.supplier.driverCode === 'UPS_OFFICIAL') assertUpsInput(normalized);
     if (!resolved.service.allowsMultiPiece && input.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
     if (input.boxes.length < resolved.service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
@@ -179,7 +179,7 @@ export class OrdersService {
         if (resolved.supplier.driverCode === 'UPS_OFFICIAL') assertUpsInput(previewOrder);
         const service = resolved.service;
         this.assertRouteOptions(previewOrder, resolved.route.fieldSchema);
-        await this.assertShipmentInput(previewOrder, undefined, resolved.route.fieldSchema);
+        await this.assertShipmentInput(previewOrder, resolved.route.fieldSchema);
         if (!service.allowsMultiPiece && previewOrder.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
         if (previewOrder.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
         const weights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [previewOrder.estimatedChargeableKg] : previewOrder.boxes.map((box) => box.weightKg);
@@ -277,8 +277,8 @@ export class OrdersService {
     if (!input.recipientPhone?.trim() || input.boxes.length !== 1) throw new BadRequestException('DPD 英国本土需要收件电话，且首期仅支持一票一件');
     if (!input.recipientName?.trim() || Array.from(input.recipientName.trim()).length > 30) throw new BadRequestException('DPD 收件人姓名对应 DestinationName，必须填写且最长 30 字符');
   }
-  private async assertShipmentInput(input: CreateOrderInput, driverCode?: string, routeSchema: { declarationRequired?: string[]; carrierRules?: { packageMaxWeightKg?: number | null } } = {}) {
-    const required = new Set<string>(await this.settings.requiredDeclarationFields(driverCode));
+  private async assertShipmentInput(input: CreateOrderInput, routeSchema: { declarationRequired?: string[]; carrierRules?: { packageMaxWeightKg?: number | null } } = {}) {
+    const required = new Set<string>(await this.settings.requiredDeclarationFields());
     for (const field of routeSchema.declarationRequired ?? []) required.add(field);
     const needs = (field: string) => required.has(field);
     const boxNos = new Set<string>();

@@ -92,7 +92,7 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。应
 
 `POST /shipments`
 
-请求体根字段为 `shipment`。必填业务字段：`service`、`parcel_count`、`to_address`、`parcels`、`declaration_currency`。`service` 是客户可见的服务代码；系统内部反查生产供应商连接，并按目的国家匹配该服务的国家路由和底层 serviceType。调用方不能传入 `supplier`或底层承运商 serviceType。目的国家可使用已启用国家表中的中文名、ISO 两位代码或既有英文名称，系统会转换为 ISO 两位代码。
+请求体根字段为 `shipment`。固定必填业务字段：`service`、`parcel_count`、`to_address`、`parcels`。`declaration_currency` 等申报字段是否必填由管理员“申报信息设置”和所选线路共同决定；FedEx 泛欧线路仍强制要求申报币种。`service` 是客户可见的服务代码；系统内部反查生产供应商连接，并按目的国家匹配该服务的国家路由和底层 serviceType。调用方不能传入 `supplier`或底层承运商 serviceType。目的国家可使用已启用国家表中的中文名、ISO 两位代码或既有英文名称，系统会转换为 ISO 两位代码。
 
 `to_address` 必须提供姓名、城市、国家、邮编、至少一个地址字段（`address_1`、`address_2`、`address_3`），并至少提供电话或手机。三段地址会按单个空格合并后重新分配为最多三段地址；FedEx 每段最多 20 个 Unicode 字符，UPS 每段最多 35 个字符，系统绝不拆分完整单词。单个单词超过所选驱动的行字符上限或总地址无法容纳时会明确拒绝请求。
 
@@ -104,7 +104,7 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。应
 
 | 结构 | 字段 | 必填/约束 |
 | --- | --- | --- |
-| `shipment` | `service`, `parcel_count`, `declaration_currency`, `to_address`, `parcels` | 必填；服务代码由管理员提供，箱数须等于 `parcels.length`，申报币种为 EUR 或 GBP。运费扣款币种由服务决定。 |
+| `shipment` | `service`, `parcel_count`, `to_address`, `parcels` | 固定必填；服务代码由管理员提供，箱数须等于 `parcels.length`。申报币种按系统设置和线路校验，填写时只支持 EUR 或 GBP；运费扣款币种由服务决定。 |
 | `shipment` | `client_reference` | 可选且可重复；不替代系统订单号或幂等键。 |
 | `shipment` | `taxwith`, `tax_number`, `deliverywith`, `exportwith`, `importwith`, `attrs` | 结构分别支持 0–4、字符串、空/ddu/ddp、0–7、0–2、枚举数组；当前 FedEx/UPS 线路仅接受默认值及空税号、空 attrs。 |
 | `to_address` | `name`, `city`, `country`, `postcode`, `address_1/2/3` | 名称、城市、国家、邮编必填，至少一个地址段非空。国家为启用国家表中的中文名、ISO 两字代码或已支持英文名。 |

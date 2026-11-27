@@ -140,7 +140,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
             <tr><td>service</td><td>string / 必填</td><td>客户可见的生产服务代码，由管理员提供；不是供应商编号。</td></tr>
             <tr><td>client_reference</td><td>string / 可选</td><td>贵司内部参考号，可重复；系统订单号仍以响应的 shipment_id 为准。</td></tr>
             <tr><td>parcel_count</td><td>integer / 必填</td><td>箱数，至少 1，必须与 parcels 数组长度相同，并满足服务件数限制。</td></tr>
-            <tr><td>declaration_currency</td><td>EUR 或 GBP / 必填</td><td>这一票全部申报货品使用的币种；运费预扣币种由服务决定。</td></tr>
+            <tr><td>declaration_currency</td><td>EUR 或 GBP / 按规则</td><td>这一票全部申报货品使用的币种；是否必填由系统申报设置与所选线路共同决定。运费预扣币种由服务决定。</td></tr>
             <tr><td>to_address</td><td>Address / 必填</td><td>收件地址，见下表。</td></tr>
             <tr><td>from_address</td><td>Address / 可选</td><td>仅保存为订单数据；当前不覆盖供应商连接预设的发件人。</td></tr>
             <tr><td>parcels</td><td>Parcel[] / 必填</td><td>至少一箱；每箱至少一条申报明细。</td></tr>
