@@ -14,7 +14,7 @@ import { ProductsService } from '../products/products.service';
 import { TrackingService } from '../tracking/tracking.service';
 
 export type ItemInput = { chineseName?: string; englishName?: string; material?: string; originCountryCode?: string; harmonizedCode?: string; quantity?: number; unitDeclaredValue?: string; declaredValueCurrency?: 'EUR' | 'GBP'; sku?: string; itemWeightKg?: string; itemLengthCm?: string; itemWidthCm?: string; itemHeightCm?: string };
-export type BoxInput = { boxNo?: string; reference?: string; weightKg: string; lengthCm: string; widthCm: string; heightCm: string; items: ItemInput[] };
+export type BoxInput = { boxNo?: string; reference?: string; estimatedChargeableKg?: string; weightKg: string; lengthCm: string; widthCm: string; heightCm: string; items: ItemInput[] };
 export type CreateOrderInput = { idempotencyKey: string; supplierId: string; recipientName: string; recipientCompany?: string; recipientPhone?: string; recipientCountryCode: string; recipientPostcode: string; recipientCity: string; recipientState?: string; recipientAddress?: string; recipientAddressLine1?: string; recipientAddressLine2?: string; recipientAddressLine3?: string; recipientResidential?: boolean; estimatedChargeableKg: string; boxes: BoxInput[]; clientReference?: string; taxWith?: number; taxNumber?: string; deliveryWith?: string; exportWith?: number; importWith?: number; shipmentAttrs?: string[]; fromAddress?: Record<string, unknown>; toAddress?: Record<string, unknown> };
 export type ImportOrderRow = { rowNo: number; customerId: string; order: Omit<CreateOrderInput, 'idempotencyKey'> };
 export type CustomerImportOrderRow = { rowNo: number; serviceCode: string; order: Omit<CreateOrderInput, 'idempotencyKey' | 'supplierId'> };
@@ -33,6 +33,7 @@ export class OrdersService {
     }
     const orderNo = this.number('ORD');
     const normalizedInput = { ...input, recipientCountryCode: await this.pricing.resolveDestinationCountry(input.recipientCountryCode), recipientState: input.recipientState?.trim() || undefined, boxes: this.normalizeBoxNumbers(input.boxes, orderNo) };
+    this.assertBoxEstimates(normalizedInput);
     const resolved = options.requestedServiceId
       ? await this.products.resolvePublicServiceRoute(options.requestedServiceId, normalizedInput.recipientCountryCode)
       : await this.products.resolveOrderRoute(input.supplierId, normalizedInput.recipientCountryCode, Boolean(options.allowSandbox));
@@ -44,7 +45,7 @@ export class OrdersService {
     await this.assertShipmentInput(normalizedInput, resolved.route.fieldSchema);
     if (!service.allowsMultiPiece && normalizedInput.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
     if (normalizedInput.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
-    const quoteWeights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [normalizedInput.estimatedChargeableKg] : normalizedInput.boxes.map((box) => box.weightKg);
+    const quoteWeights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [normalizedInput.estimatedChargeableKg] : normalizedInput.boxes.map((box) => box.estimatedChargeableKg ?? box.weightKg);
     const quote = await this.pricing.quote(customerId, service.id, normalizedInput.recipientCountryCode, quoteWeights, normalizedInput.recipientPostcode, normalizedInput.boxes);
     const precharge = new Prisma.Decimal(quote.total);
     const order = await this.prisma.$transaction(async (tx) => {
@@ -56,8 +57,8 @@ export class OrdersService {
       const dispatchJob = supportsAutomaticShipment(resolved.supplier.driverCode)
         ? { create: { status: ShipmentDispatchJobStatus.PENDING, stage: 'QUEUED', reasonCode: 'QUEUED', publicMessage: '订单已受理，正在等待面单生成' } }
         : { create: { status: ShipmentDispatchJobStatus.BLOCKED, stage: 'UNSUPPORTED', reasonCode: 'DRIVER_NOT_SUPPORTED', publicMessage: '当前供应商连接暂不支持自动生成面单' } };
-      const routeSnapshot = { driverCode: resolved.supplier.driverCode, environment: resolved.supplier.environment, accountFingerprint: resolved.accountFingerprint ?? null, shipperCountryCode: resolved.shipperCountryCode ?? null, packageOrder: normalizedInput.boxes.map(box => box.boxNo), routeId: resolved.route.id, routeCode: resolved.route.code, routeName: resolved.route.name, routeType: resolved.route.routeType, supplierId: resolved.supplier.id, supplierCode: resolved.supplier.code, supplierName: resolved.supplier.name, carrierServiceType: resolved.route.carrierServiceType, fieldSchema: resolved.route.fieldSchema, internalServiceId: service.id, internalServiceCode: service.code };
-      const order = await tx.order.create({ data: { orderNo, idempotencyKey: normalizedInput.idempotencyKey, customerId, serviceId: service.id, supplierRouteId: resolved.route.id, supplierRouteSnapshot: routeSnapshot as Prisma.InputJsonValue, shipmentStatus: ShipmentStatus.SUBMITTED, feeStatus: FeeStatus.PRECHARGED, currency: quote.currency, estimatedChargeableKg: normalizedInput.estimatedChargeableKg, prechargedAmount: precharge, recipientName: normalizedInput.recipientName, recipientCompany: normalizedInput.recipientCompany, recipientPhone: normalizedInput.recipientPhone, recipientCountryCode: normalizedInput.recipientCountryCode, recipientPostcode: normalizedInput.recipientPostcode, recipientCity: normalizedInput.recipientCity, recipientState: normalizedInput.recipientState ?? null, recipientAddressRaw: recipientAddress.raw, recipientAddressLine1: recipientAddress.line1, recipientAddressLine2: recipientAddress.line2, recipientAddressLine3: recipientAddress.line3, recipientResidential: normalizedInput.recipientResidential ?? false, clientReference: normalizedInput.clientReference?.trim() || null, taxWith: normalizedInput.taxWith ?? 0, taxNumber: normalizedInput.taxNumber?.trim() || null, deliveryWith: normalizedInput.deliveryWith ?? '', exportWith: normalizedInput.exportWith ?? 0, importWith: normalizedInput.importWith ?? 0, shipmentAttrs: (normalizedInput.shipmentAttrs ?? []) as Prisma.InputJsonValue, fromAddress: normalizedInput.fromAddress as Prisma.InputJsonValue | undefined, toAddress: normalizedInput.toAddress as Prisma.InputJsonValue | undefined, boxes: { create: normalizedInput.boxes.map((box) => ({ ...box, items: { create: box.items.map((item) => this.normalizeItem(item)) } })) }, dispatchJob, feeLines: { create: [
+      const routeSnapshot = { driverCode: resolved.supplier.driverCode, environment: resolved.supplier.environment, accountFingerprint: resolved.accountFingerprint ?? null, shipperCountryCode: resolved.shipperCountryCode ?? null, packageOrder: normalizedInput.boxes.map(box => box.boxNo), boxEstimatedChargeableKg: normalizedInput.boxes.map(box => ({ boxNo: box.boxNo, estimatedChargeableKg: box.estimatedChargeableKg ?? null })), routeId: resolved.route.id, routeCode: resolved.route.code, routeName: resolved.route.name, routeType: resolved.route.routeType, supplierId: resolved.supplier.id, supplierCode: resolved.supplier.code, supplierName: resolved.supplier.name, carrierServiceType: resolved.route.carrierServiceType, fieldSchema: resolved.route.fieldSchema, internalServiceId: service.id, internalServiceCode: service.code };
+      const order = await tx.order.create({ data: { orderNo, idempotencyKey: normalizedInput.idempotencyKey, customerId, serviceId: service.id, supplierRouteId: resolved.route.id, supplierRouteSnapshot: routeSnapshot as Prisma.InputJsonValue, shipmentStatus: ShipmentStatus.SUBMITTED, feeStatus: FeeStatus.PRECHARGED, currency: quote.currency, estimatedChargeableKg: normalizedInput.estimatedChargeableKg, prechargedAmount: precharge, recipientName: normalizedInput.recipientName, recipientCompany: normalizedInput.recipientCompany, recipientPhone: normalizedInput.recipientPhone, recipientCountryCode: normalizedInput.recipientCountryCode, recipientPostcode: normalizedInput.recipientPostcode, recipientCity: normalizedInput.recipientCity, recipientState: normalizedInput.recipientState ?? null, recipientAddressRaw: recipientAddress.raw, recipientAddressLine1: recipientAddress.line1, recipientAddressLine2: recipientAddress.line2, recipientAddressLine3: recipientAddress.line3, recipientResidential: normalizedInput.recipientResidential ?? false, clientReference: normalizedInput.clientReference?.trim() || null, taxWith: normalizedInput.taxWith ?? 0, taxNumber: normalizedInput.taxNumber?.trim() || null, deliveryWith: normalizedInput.deliveryWith ?? '', exportWith: normalizedInput.exportWith ?? 0, importWith: normalizedInput.importWith ?? 0, shipmentAttrs: (normalizedInput.shipmentAttrs ?? []) as Prisma.InputJsonValue, fromAddress: normalizedInput.fromAddress as Prisma.InputJsonValue | undefined, toAddress: normalizedInput.toAddress as Prisma.InputJsonValue | undefined, boxes: { create: normalizedInput.boxes.map(({ estimatedChargeableKg: _estimatedChargeableKg, ...box }) => ({ ...box, items: { create: box.items.map((item) => this.normalizeItem(item)) } })) }, dispatchJob, feeLines: { create: [
         { feeType: 'SUPPLIER_WEIGHT_FREIGHT', amount: quote.weightFreight, currency: quote.currency, snapshot: { costVersion: quote.costVersion, priceColumn: quote.priceColumn } },
         { feeType: 'SUPPLIER_MINIMUM_BOX_ADJUSTMENT', amount: quote.minimumPerBoxAdjustment, currency: quote.currency, snapshot: { costVersion: quote.costVersion, priceColumn: quote.priceColumn } },
         { feeType: 'SUPPLIER_MINIMUM_SHIPMENT_ADJUSTMENT', amount: quote.minimumPerShipmentAdjustment, currency: quote.currency, snapshot: { costVersion: quote.costVersion, priceColumn: quote.priceColumn } },
@@ -100,6 +101,7 @@ export class OrdersService {
   createForAdmin(customerId: string, input: CreateOrderInput) { return this.createForCustomer(customerId, input, { allowSandbox: true }); }
   async quoteForCustomer(customerId: string, input: CreateOrderInput, allowSandbox = false, requestedServiceId?: string) {
     const normalized = { ...input, recipientCountryCode: await this.pricing.resolveDestinationCountry(input.recipientCountryCode), boxes: this.normalizeBoxNumbers(input.boxes, 'QUOTE') };
+    this.assertBoxEstimates(normalized);
     const resolved = requestedServiceId
       ? await this.products.resolvePublicServiceRoute(requestedServiceId, normalized.recipientCountryCode)
       : await this.products.resolveOrderRoute(input.supplierId, normalized.recipientCountryCode, allowSandbox);
@@ -110,7 +112,7 @@ export class OrdersService {
     if (resolved.supplier.driverCode === 'UPS_OFFICIAL') assertUpsInput(normalized);
     if (!resolved.service.allowsMultiPiece && input.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
     if (input.boxes.length < resolved.service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
-    const weights = resolved.service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [input.estimatedChargeableKg] : input.boxes.map(box => box.weightKg);
+    const weights = resolved.service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [normalized.estimatedChargeableKg] : normalized.boxes.map(box => box.estimatedChargeableKg ?? box.weightKg);
     return this.pricing.quote(customerId, resolved.service.id, normalized.recipientCountryCode, weights, input.recipientPostcode, input.boxes);
   }
   orderableSuppliers(allowSandbox: boolean) { return this.products.orderableSuppliers(allowSandbox); }
@@ -173,6 +175,7 @@ export class OrdersService {
         if (!customer) throw new NotFoundException('客户不存在');
         if (customer.status !== CustomerStatus.NORMAL) throw new ForbiddenException('客户状态不可下单');
         const previewOrder = { ...row.order, recipientCountryCode: await this.pricing.resolveDestinationCountry(row.order.recipientCountryCode), boxes: this.normalizeBoxNumbers(row.order.boxes, `PREVIEW-${row.rowNo}`) } as CreateOrderInput;
+        this.assertBoxEstimates(previewOrder);
         const resolved = await this.products.resolveOrderRoute(previewOrder.supplierId, previewOrder.recipientCountryCode, true);
         normalizeRecipientAddress(previewOrder.recipientAddress === undefined ? [previewOrder.recipientAddressLine1, previewOrder.recipientAddressLine2, previewOrder.recipientAddressLine3] : [previewOrder.recipientAddress], resolved.supplier.driverCode);
         if (resolved.supplier.driverCode === 'DPD_RELAY_UK') this.assertDpdInput(previewOrder);
@@ -182,7 +185,7 @@ export class OrdersService {
         await this.assertShipmentInput(previewOrder, resolved.route.fieldSchema);
         if (!service.allowsMultiPiece && previewOrder.boxes.length !== 1) throw new BadRequestException('该服务仅支持一票一件');
         if (previewOrder.boxes.length < service.minPieces) throw new BadRequestException('订单箱数低于服务最小件数');
-        const weights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [previewOrder.estimatedChargeableKg] : previewOrder.boxes.map((box) => box.weightKg);
+        const weights = service.measurementMethod === MeasurementMethod.PER_SHIPMENT ? [previewOrder.estimatedChargeableKg] : previewOrder.boxes.map((box) => box.estimatedChargeableKg ?? box.weightKg);
         const quote = await this.pricing.quote(row.customerId, service.id, previewOrder.recipientCountryCode, weights, previewOrder.recipientPostcode, previewOrder.boxes);
         const wallet = customer.wallets.find((item) => item.currency === quote.currency);
         if (!wallet || wallet.balance.lessThan(quote.total) || wallet.balance.lessThan(0)) throw new ForbiddenException(`${quote.currency} 余额不足`);
@@ -276,6 +279,13 @@ export class OrdersService {
   private assertDpdInput(input: CreateOrderInput) {
     if (!input.recipientPhone?.trim() || input.boxes.length !== 1) throw new BadRequestException('DPD 英国本土需要收件电话，且首期仅支持一票一件');
     if (!input.recipientName?.trim() || Array.from(input.recipientName.trim()).length > 30) throw new BadRequestException('DPD 收件人姓名对应 DestinationName，必须填写且最长 30 字符');
+  }
+  private assertBoxEstimates(input: CreateOrderInput) {
+    const estimates = input.boxes.map((box) => box.estimatedChargeableKg);
+    if (!estimates.some((weight) => weight !== undefined)) return;
+    if (estimates.some((weight) => !weight || !/^\d+(\.\d{1,3})?$/.test(weight) || Number(weight) <= 0)) throw new BadRequestException('每个箱子都必须填写大于 0 的预估收费重，最多保留 3 位小数');
+    const total = estimates.reduce((sum, weight) => sum.plus(weight!), new Prisma.Decimal(0));
+    if (!total.equals(new Prisma.Decimal(input.estimatedChargeableKg))) throw new BadRequestException('整票预估收费重必须等于各箱预估收费重之和');
   }
   private async assertShipmentInput(input: CreateOrderInput, routeSchema: { declarationRequired?: string[]; carrierRules?: { packageMaxWeightKg?: number | null } } = {}) {
     const required = new Set<string>(await this.settings.requiredDeclarationFields());

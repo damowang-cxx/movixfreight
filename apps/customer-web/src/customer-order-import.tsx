@@ -5,22 +5,39 @@ import { errorText } from './error-dialog';
 
 type ImportResult = { rowNo: number; status: 'READY' | 'ALREADY_CREATED' | 'CREATED' | 'ERROR'; currency?: string; estimatedReceivable?: string; orderNo?: string; labelStatus?: string; message?: string; error?: string };
 type ImportRow = { rowNo: number; serviceCode: string; order: Record<string, any> };
-type Props = { services: { code: string; name: string }[]; request: (path: string, options?: RequestInit) => Promise<Response>; onDone: () => Promise<void> };
+type Props = { services: { code: string; name: string }[]; declarationFields: { fields?: Array<{ code: string; required: boolean }> } | null; request: (path: string, options?: RequestInit) => Promise<Response>; onDone: () => Promise<void> };
 
-const headers = ['导入订单号', '服务代码', '收件人', '收件公司', '收件电话', '国家', '邮编', '城市', '省/州', '地址', '是否住宅地址', '预估收费重(kg)', '箱号', '实重(kg)', '长(cm)', '宽(cm)', '高(cm)', '中文品名', '英文品名', '材质', '商品净重(kg)', '原产国', 'HS编码', '数量', '单件申报货值', '申报币种'];
+const headers = ['导入订单号', '服务代码', '收件人', '收件公司', '收件电话', '国家', '邮编', '城市', '省/州', '地址', '是否住宅地址', '预估收费重(kg)', '箱号', '长(cm)', '宽(cm)', '高(cm)', '中文品名', '英文品名', '材质', '商品净重(kg)', '原产国', 'HS编码', '数量', '单件申报货值', '申报币种'];
+const declarationHeaders: Record<string, string> = { weightKg: '预估收费重(kg)', lengthCm: '长(cm)', widthCm: '宽(cm)', heightCm: '高(cm)', chineseName: '中文品名', englishName: '英文品名', material: '材质', originCountryCode: '原产国', harmonizedCode: 'HS编码', quantity: '数量', unitDeclaredValue: '单件申报货值', declaredValueCurrency: '申报币种' };
+const baseRequiredHeaders = new Set(['导入订单号', '服务代码', '收件人', '国家', '邮编', '城市', '地址', '预估收费重(kg)', '长(cm)', '宽(cm)', '高(cm)']);
 const value = (record: Record<string, unknown>, key: string) => String(record[key] ?? '').trim();
+export function importTemplateHeaders(declarationFields: Props['declarationFields']) {
+  const required = new Set([...baseRequiredHeaders, ...(declarationFields?.fields ?? []).filter((field) => field.required).map((field) => declarationHeaders[field.code]).filter((header): header is string => Boolean(header))]);
+  return headers.map((header) => required.has(header) ? `${header}*` : header);
+}
+export function normalizeImportHeaders(record: Record<string, unknown>) {
+  const normalized: Record<string, unknown> = {};
+  for (const [header, cell] of Object.entries(record)) {
+    const key = header.trim().replace(/^[*＊]\s*/, '').replace(/\s*[*＊]\s*$/, '').trim();
+    if (Object.hasOwn(normalized, key)) throw new Error(`Excel 中存在重复表头：${key}`);
+    normalized[key] = cell;
+  }
+  return normalized;
+}
 
-async function downloadTemplate(services: Props['services']) {
+async function downloadTemplate(services: Props['services'], declarationFields: Props['declarationFields']) {
   const XLSX = await import('xlsx');
   const workbook = XLSX.utils.book_new();
-  const sheet = XLSX.utils.aoa_to_sheet([headers]);
+  const sheet = XLSX.utils.aoa_to_sheet([importTemplateHeaders(declarationFields)]);
   sheet['!cols'] = headers.map((header) => ({ wch: Math.max(14, header.length * 2 + 2) }));
   XLSX.utils.book_append_sheet(workbook, sheet, '订单导入');
   const instructions = XLSX.utils.aoa_to_sheet([
     ['填写说明', '每行一条申报货品；同一导入订单号为同一票。相同箱号的多行合并为一箱，箱号为空时每行单独生成一箱。'],
     ['服务代码', '仅填写下方客户可用服务代码；供应商连接编号不用填写。'],
     ['国家', '填写已启用国家表中的中文名或 ISO 两位代码。'],
-    ['预估收费重(kg)', '必须填写大于 0 的数字，最多保留 3 位小数。'],
+    ['预估收费重(kg)', '按箱填写；不同箱号可不同。同一箱号有多行货品时须一致。系统按每箱数值计价，并汇总为整票预估收费重。填写大于 0 的数字，最多保留 3 位小数。'],
+    ['表头星号', '星号提示当前系统设置中的必填字段；上传时带星号或不带星号的表头均可识别，字段值仍按当前配置和线路规则校验。箱号可留空并由系统生成。'],
+    ['下单重量', 'Excel 只填写每箱预估收费重；建单时系统以此作为承运商所需的申报重量。最终收费重在后续对账时确定；实际重量的自动回传取决于承运商接口。'],
     ['泛欧线路', '商品净重、英文品名、原产国、HS 编码、数量、单件货值和申报币种必填。'],
     ['可用服务代码', '服务名称'],
     ...services.map((service) => [service.code, service.name]),
@@ -30,12 +47,12 @@ async function downloadTemplate(services: Props['services']) {
   XLSX.writeFileXLSX(workbook, 'movix-customer-order-import-template.xlsx');
 }
 
-function parseRecords(records: Record<string, unknown>[]): { rows: ImportRow[]; errors: ImportResult[] } {
+export function parseRecords(records: Record<string, unknown>[]): { rows: ImportRow[]; errors: ImportResult[] } {
   const groups = new Map<string, ImportRow>();
   const errors: ImportResult[] = [];
-  const orderFields = ['收件人', '收件公司', '收件电话', '国家', '邮编', '城市', '省/州', '地址', '是否住宅地址', '预估收费重(kg)'];
-  const boxFields = ['实重(kg)', '长(cm)', '宽(cm)', '高(cm)'];
-  const firstRecords = new Map<string, Record<string, unknown>>();
+  const orderFields = ['收件人', '收件公司', '收件电话', '国家', '邮编', '城市', '省/州', '地址', '是否住宅地址'];
+  const boxFields = ['预估收费重(kg)', '长(cm)', '宽(cm)', '高(cm)'];
+  const firstRecords = new Map<string, { record: Record<string, unknown>; rowNo: number }>();
   const firstBoxes = new Map<string, Record<string, unknown>>();
   records.forEach((record, index) => {
     const rowNo = index + 2;
@@ -43,8 +60,10 @@ function parseRecords(records: Record<string, unknown>[]): { rows: ImportRow[]; 
     const serviceCode = value(record, '服务代码');
     if (!reference || !serviceCode) { errors.push({ rowNo, status: 'ERROR', error: !reference ? '缺少导入订单号' : '缺少服务代码' }); return; }
     const previous = firstRecords.get(reference);
-    if (previous && (serviceCode !== value(previous, '服务代码') || orderFields.some((field) => value(record, field) !== value(previous, field)))) {
-      errors.push({ rowNo, status: 'ERROR', error: '同一导入订单号的服务或收件信息不一致' }); return;
+    const changedFields = previous ? ['服务代码', ...orderFields].filter((field) => value(record, field) !== value(previous.record, field)) : [];
+    if (previous && changedFields.length) {
+      const details = changedFields.slice(0, 3).map((field) => `${field}（第 ${previous.rowNo} 行：${value(previous.record, field) || '空'}；本行：${value(record, field) || '空'}）`).join('；');
+      errors.push({ rowNo, status: 'ERROR', error: `导入订单号 ${reference} 与第 ${previous.rowNo} 行不一致：${details}${changedFields.length > 3 ? `；另有 ${changedFields.length - 3} 列不同` : ''}。同一票请统一填写；若要分别下单，请使用不同的导入订单号。` }); return;
     }
     const quantity = value(record, '数量');
     if (quantity && (!/^\d+$/.test(quantity) || Number(quantity) < 1)) { errors.push({ rowNo, status: 'ERROR', error: '数量必须为正整数' }); return; }
@@ -59,18 +78,21 @@ function parseRecords(records: Record<string, unknown>[]): { rows: ImportRow[]; 
       recipientPhone: value(record, '收件电话'), recipientCountryCode: value(record, '国家') || value(record, '国家代码'),
       recipientPostcode: value(record, '邮编'), recipientCity: value(record, '城市'), recipientState: value(record, '省/州') || undefined,
       recipientAddress: value(record, '地址'), recipientResidential: ['是', 'Y', 'YES', 'TRUE', '1'].includes(value(record, '是否住宅地址').toUpperCase()),
-      estimatedChargeableKg, boxes: [],
+      estimatedChargeableKg: '0.000', boxes: [],
     } };
     const boxNo = value(record, '箱号');
     const boxKey = `${reference}\u0000${boxNo}`;
     const previousBox = boxNo ? firstBoxes.get(boxKey) : undefined;
-    if (previousBox && boxFields.some((field) => value(record, field) !== value(previousBox, field))) {
-      errors.push({ rowNo, status: 'ERROR', error: `箱号 ${boxNo} 的重量或尺寸不一致` }); return;
+    const changedBoxFields = previousBox ? boxFields.filter((field) => value(record, field) !== value(previousBox, field)) : [];
+    if (changedBoxFields.length) {
+      errors.push({ rowNo, status: 'ERROR', error: `箱号 ${boxNo} 的${changedBoxFields.join('、')}与此前货品行不一致` }); return;
     }
     let box = boxNo ? group.order.boxes.find((item: any) => item.boxNo === boxNo) : undefined;
     if (!box) {
-      box = { boxNo: boxNo || undefined, weightKg: value(record, '实重(kg)'), lengthCm: value(record, '长(cm)'), widthCm: value(record, '宽(cm)'), heightCm: value(record, '高(cm)'), items: [] };
+      box = { boxNo: boxNo || undefined, estimatedChargeableKg, weightKg: estimatedChargeableKg, lengthCm: value(record, '长(cm)'), widthCm: value(record, '宽(cm)'), heightCm: value(record, '高(cm)'), items: [] };
       group.order.boxes.push(box);
+      const thousandths = group.order.boxes.reduce((sum: number, item: any) => sum + Math.round(Number(item.estimatedChargeableKg) * 1000), 0);
+      group.order.estimatedChargeableKg = (thousandths / 1000).toFixed(3);
       if (boxNo) firstBoxes.set(boxKey, record);
     }
     box.items.push({
@@ -80,7 +102,7 @@ function parseRecords(records: Record<string, unknown>[]): { rows: ImportRow[]; 
       quantity: quantity ? Number(quantity) : undefined, unitDeclaredValue: value(record, '单件申报货值') || undefined,
       declaredValueCurrency: value(record, '申报币种').toUpperCase() || undefined,
     });
-    firstRecords.set(reference, previous ?? record);
+    firstRecords.set(reference, previous ?? { record, rowNo });
     groups.set(reference, group);
   });
   return { rows: [...groups.values()], errors };
@@ -91,7 +113,7 @@ function previewErrorText(error: unknown, rows: ImportRow[]) {
     `Excel 第 ${rows[Number(index)]?.rowNo ?? Number(index) + 2} 行：预估收费重(kg)必须为大于 0 的数字，最多保留 3 位小数`);
 }
 
-export function CustomerOrderImport({ services, request, onDone }: Props) {
+export function CustomerOrderImport({ services, declarationFields, request, onDone }: Props) {
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [results, setResults] = useState<ImportResult[]>([]);
   const [sourceFileName, setSourceFileName] = useState('');
@@ -111,7 +133,7 @@ export function CustomerOrderImport({ services, request, onDone }: Props) {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       if (!sheet) throw new Error('工作簿不包含可读取的工作表');
-      const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
+      const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' }).map(normalizeImportHeaders);
       if (!records.length) throw new Error('工作表没有导入数据');
       const parsed = parseRecords(records);
       parsedRows = parsed.rows;
@@ -156,7 +178,7 @@ export function CustomerOrderImport({ services, request, onDone }: Props) {
     {importError && <Alert showIcon type="error" message="Excel 预校验或导入未完成" description={<span style={{ whiteSpace: 'pre-wrap' }}>{importError}</span>} style={{ marginTop: 12 }} />}
     <Modal title="Excel 预校验或导入未完成" open={errorDialogOpen} zIndex={1100} okText="我知道了" onOk={() => setErrorDialogOpen(false)} onCancel={() => setErrorDialogOpen(false)} cancelButtonProps={{ style: { display: 'none' } }}><Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{importError}</Typography.Text></Modal>
     <div className="customer-import__actions">
-      <Space wrap><Button icon={<DownloadOutlined />} onClick={() => { void downloadTemplate(services).catch((error) => showImportError(errorText(error))); }}>下载 Excel 模板</Button><Upload accept=".xlsx,.xls" maxCount={1} showUploadList={false} beforeUpload={(file) => { void parseFile(file); return false; }}><Button type="primary" icon={<UploadOutlined />} loading={busy}>选择并预校验</Button></Upload><Button disabled={!ready || busy} onClick={commit}>{results.some((item) => item.status === 'CREATED') ? '重试未成功订单' : `确认创建 ${rows.length || ''} 票订单`}</Button></Space>
+      <Space wrap><Button icon={<DownloadOutlined />} onClick={() => { void downloadTemplate(services, declarationFields).catch((error) => showImportError(errorText(error))); }}>下载 Excel 模板</Button><Upload accept=".xlsx,.xls" maxCount={1} showUploadList={false} beforeUpload={(file) => { void parseFile(file); return false; }}><Button type="primary" icon={<UploadOutlined />} loading={busy}>选择并预校验</Button></Upload><Button disabled={!ready || busy} onClick={commit}>{results.some((item) => item.status === 'CREATED') ? '重试未成功订单' : `确认创建 ${rows.length || ''} 票订单`}</Button></Space>
       {sourceFileName && <Typography.Text type="secondary">当前文件：{sourceFileName}</Typography.Text>}
     </div>
     <Card size="small" className="customer-import__services" title="可用服务代码"><Space wrap>{services.length ? services.map((service) => <Tag key={service.code}>{service.name} · {service.code}</Tag>) : <Typography.Text type="secondary">暂无可下单服务</Typography.Text>}</Space></Card>

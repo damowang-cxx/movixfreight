@@ -812,21 +812,44 @@ function ExcelOrderImport({ data, request, refresh }: Context) {
   const [rows, setRows] = useState<any[]>([]); const [preview, setPreview] = useState<any[]>([]); const [sourceFileName, setSourceFileName] = useState(''); const [busy, setBusy] = useState(false);
   const [importError, setImportError] = useState(''); const [errorDialogOpen, setErrorDialogOpen] = useState(false);
   const showImportError = (detail: string) => { setImportError(detail); setErrorDialogOpen(true); };
-  const downloadTemplate = () => { const headers = ['导入订单号', '客户编号', '供应商编号', '收件人', '收件公司', '收件电话', '国家', '邮编', '城市', '省/州', '地址', '是否住宅地址', '预估收费重(kg)', '箱号', '实重(kg)', '长(cm)', '宽(cm)', '高(cm)', '中文品名', '英文品名', '材质', '商品净重(kg)', '原产国', 'HS编码', '数量', '单件申报货值', '申报币种']; const sheet = XLSX.utils.json_to_sheet([{ '导入订单号': 'IMPORT-001', '客户编号': 'CUS-请替换', '供应商编号': 'SUPPLIER-请替换', '收件人': 'Jane Doe', '收件公司': '', '收件电话': '+31201234567', '国家': '荷兰', '邮编': '1012JS', '城市': 'Amsterdam', '省/州': '', '地址': 'Dam 1', '是否住宅地址': '否', '预估收费重(kg)': '1.000', '箱号': '', '实重(kg)': '1.000', '长(cm)': '20', '宽(cm)': '15', '高(cm)': '10', '中文品名': '样品', '英文品名': 'Sample', '材质': 'Plastic', '商品净重(kg)': '0.500', '原产国': 'CN', 'HS编码': '392690', '数量': 1, '单件申报货值': '1.00', '申报币种': 'EUR' }], { header: headers }); const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, sheet, '订单导入'); XLSX.writeFileXLSX(workbook, 'movix-order-import-template.xlsx'); };
+  const downloadTemplate = () => {
+    const headers = ['导入订单号', '客户编号', '供应商编号', '收件人', '收件公司', '收件电话', '国家', '邮编', '城市', '省/州', '地址', '是否住宅地址', '预估收费重(kg)', '箱号', '长(cm)', '宽(cm)', '高(cm)', '中文品名', '英文品名', '材质', '商品净重(kg)', '原产国', 'HS编码', '数量', '单件申报货值', '申报币种'];
+    const fieldHeaders: Record<string, string> = { weightKg: '预估收费重(kg)', lengthCm: '长(cm)', widthCm: '宽(cm)', heightCm: '高(cm)', chineseName: '中文品名', englishName: '英文品名', material: '材质', originCountryCode: '原产国', harmonizedCode: 'HS编码', quantity: '数量', unitDeclaredValue: '单件申报货值', declaredValueCurrency: '申报币种' };
+    const required = new Set(['导入订单号', '客户编号', '供应商编号', '收件人', '国家', '邮编', '城市', '地址', '预估收费重(kg)', '长(cm)', '宽(cm)', '高(cm)', ...(data.declarationFields?.fields ?? []).filter((field: any) => field.required).map((field: any) => fieldHeaders[field.code]).filter(Boolean)]);
+    const example: Record<string, string | number> = { '导入订单号': 'IMPORT-001', '客户编号': 'CUS-请替换', '供应商编号': 'SUPPLIER-请替换', '收件人': 'Jane Doe', '收件电话': '+31201234567', '国家': '荷兰', '邮编': '1012JS', '城市': 'Amsterdam', '地址': 'Dam 1', '是否住宅地址': '否', '预估收费重(kg)': '1.000', '长(cm)': '20', '宽(cm)': '15', '高(cm)': '10', '中文品名': '样品', '英文品名': 'Sample', '材质': 'Plastic', '商品净重(kg)': '0.500', '原产国': 'CN', 'HS编码': '392690', '数量': 1, '单件申报货值': '1.00', '申报币种': 'EUR' };
+    const sheet = XLSX.utils.aoa_to_sheet([headers.map((header) => required.has(header) ? `${header}*` : header), headers.map((header) => example[header] ?? '')]);
+    const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, sheet, '订单导入'); XLSX.writeFileXLSX(workbook, 'movix-order-import-template.xlsx');
+  };
   const parseFile = async (file: File) => {
     setRows([]); setPreview([]); setSourceFileName(''); setImportError(''); setErrorDialogOpen(false);
     let parsedRows: any[] = [];
     try {
       setBusy(true); const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' }); const firstSheet = workbook.Sheets[workbook.SheetNames[0]]; if (!firstSheet) throw new Error('工作簿不包含可读取的工作表');
-      const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: '' }); if (!records.length) throw new Error('工作表没有导入数据');
+      const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, { defval: '' }).map((record) => {
+        const normalized: Record<string, unknown> = {};
+        for (const [header, cell] of Object.entries(record)) {
+          const key = header.trim().replace(/^[*＊]\s*/, '').replace(/\s*[*＊]\s*$/, '').trim();
+          if (Object.hasOwn(normalized, key)) throw new Error(`Excel 中存在重复表头：${key}`);
+          normalized[key] = cell;
+        }
+        return normalized;
+      });
+      if (!records.length) throw new Error('工作表没有导入数据');
       const groups = new Map<string, any>(); const localErrors: any[] = [];
       const value = (record: Record<string, unknown>, key: string) => String(record[key] ?? '').trim();
       records.forEach((record, index) => { const rowNo = index + 2; const reference = value(record, '导入订单号'); const customerNo = value(record, '客户编号'); const supplierCode = value(record, '供应商编号'); const customer = (data.customers ?? []).find((item: any) => item.customerNo === customerNo); const supplier = (data.suppliers ?? []).find((item: any) => item.code === supplierCode); const boxNo = value(record, '箱号'); if (!reference || !customer || !supplier) { localErrors.push({ rowNo, status: 'ERROR', error: !reference ? '缺少导入订单号' : !customer ? `未找到客户：${customerNo || '空'}` : `未找到供应商：${supplierCode || '空'}` }); return; }
         const estimatedChargeableKg = value(record, '预估收费重(kg)');
         if (!/^\d+(\.\d{1,3})?$/.test(estimatedChargeableKg) || Number(estimatedChargeableKg) <= 0) { localErrors.push({ rowNo, status: 'ERROR', error: '预估收费重(kg)必须为大于 0 的数字，最多保留 3 位小数' }); return; }
         const existing = groups.get(reference); if (existing && (existing.customerId !== customer.id || existing.order.supplierId !== supplier.id)) { localErrors.push({ rowNo, status: 'ERROR', error: '同一导入订单号的客户或供应商不一致' }); return; }
-        const order = existing ?? { rowNo, customerId: customer.id, order: { supplierId: supplier.id, recipientName: value(record, '收件人'), recipientCompany: value(record, '收件公司') || undefined, recipientPhone: value(record, '收件电话'), recipientCountryCode: value(record, '国家') || value(record, '国家代码'), recipientPostcode: value(record, '邮编'), recipientCity: value(record, '城市'), recipientState: value(record, '省/州') || undefined, recipientAddress: value(record, '地址'), recipientResidential: ['是', 'Y', 'YES', 'TRUE', '1'].includes(value(record, '是否住宅地址').toUpperCase()), estimatedChargeableKg, boxes: [] } };
-        let box = boxNo ? order.order.boxes.find((item: any) => item.boxNo === boxNo) : undefined; if (!box) { box = { boxNo: boxNo || undefined, weightKg: value(record, '实重(kg)'), lengthCm: value(record, '长(cm)'), widthCm: value(record, '宽(cm)'), heightCm: value(record, '高(cm)'), items: [] }; order.order.boxes.push(box); }
+        const order = existing ?? { rowNo, customerId: customer.id, order: { supplierId: supplier.id, recipientName: value(record, '收件人'), recipientCompany: value(record, '收件公司') || undefined, recipientPhone: value(record, '收件电话'), recipientCountryCode: value(record, '国家') || value(record, '国家代码'), recipientPostcode: value(record, '邮编'), recipientCity: value(record, '城市'), recipientState: value(record, '省/州') || undefined, recipientAddress: value(record, '地址'), recipientResidential: ['是', 'Y', 'YES', 'TRUE', '1'].includes(value(record, '是否住宅地址').toUpperCase()), estimatedChargeableKg: '0.000', boxes: [] } };
+        let box = boxNo ? order.order.boxes.find((item: any) => item.boxNo === boxNo) : undefined;
+        if (box && box.estimatedChargeableKg !== estimatedChargeableKg) { localErrors.push({ rowNo, status: 'ERROR', error: `箱号 ${boxNo} 的预估收费重(kg)与此前货品行不一致` }); return; }
+        if (!box) {
+          box = { boxNo: boxNo || undefined, estimatedChargeableKg, weightKg: estimatedChargeableKg, lengthCm: value(record, '长(cm)'), widthCm: value(record, '宽(cm)'), heightCm: value(record, '高(cm)'), items: [] };
+          order.order.boxes.push(box);
+          const thousandths = order.order.boxes.reduce((sum: number, item: any) => sum + Math.round(Number(item.estimatedChargeableKg) * 1000), 0);
+          order.order.estimatedChargeableKg = (thousandths / 1000).toFixed(3);
+        }
         const quantity = value(record, '数量');
         box.items.push({ chineseName: value(record, '中文品名') || undefined, englishName: value(record, '英文品名') || undefined, material: value(record, '材质') || undefined, itemWeightKg: value(record, '商品净重(kg)') || undefined, originCountryCode: value(record, '原产国').toUpperCase() || undefined, harmonizedCode: value(record, 'HS编码') || undefined, quantity: quantity ? Number(quantity) : undefined, unitDeclaredValue: value(record, '单件申报货值') || undefined, declaredValueCurrency: value(record, '申报币种').toUpperCase() || undefined }); groups.set(reference, order);
       });
