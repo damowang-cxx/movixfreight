@@ -13,7 +13,7 @@ import { OrdersService } from './orders.service';
 const tracking = ['1ZABC1230000000001', '1ZABC1230000000002'];
 const response = (image = 'R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==') => ({ ShipmentResponse: { Response: { ResponseStatus: { Code: '1' } }, ShipmentResults: { ShipmentIdentificationNumber: tracking[0], PackageResults: tracking.map(TrackingNumber => ({ TrackingNumber, ShippingLabel: { GraphicImage: image } })) } } });
 function harness() {
-  const order: any = upsOrder(); const saved: any[] = []; const audit: any[] = []; const refunds = new Set(); let createCalls = 0; let cancelCalls = 0;
+  const order: any = { ...upsOrder(), feeStatus: 'PRECHARGED' }; const saved: any[] = []; const audit: any[] = []; const refunds = new Set(); let createCalls = 0; let cancelCalls = 0;
   const job: any = { orderId: order.id, status: 'PROCESSING' };
   const db: any = {
     order: { findUnique: async () => structuredClone(order), updateMany: async ({ where, data }: any) => { if (where.shipmentStatus && order.shipmentStatus !== where.shipmentStatus) return { count: 0 }; Object.assign(order, data); return { count: 1 }; }, update: async ({ data }: any) => Object.assign(order, data) },
@@ -27,7 +27,8 @@ function harness() {
   const config = new UpsOfficialConfig({} as any); (config as any).profiles = () => ({ UPS1: profile });
   const connector: any = { getAccessToken: async () => 'token', create: async () => { createCalls++; return { body: response(), status: 200, transactionId: 'tx' }; }, cancel: async () => { cancelCalls++; return { body: { VoidShipmentResponse: { Response: { ResponseStatus: { Code: '1' } }, SummaryResult: { Status: { Code: '1' } } } }, status: 200, transactionId: 'cancel' }; } };
   const labels = new UpsLabelService(db);
-  const service = new UpsShipmentService(db, config, connector, labels);
+  const refundService: any = { assertRefundable: () => undefined, complete: async () => { refunds.add(order.id); order.shipmentStatus = 'CANCELLED'; order.feeStatus = 'REFUNDED'; } };
+  const service = new UpsShipmentService(db, config, connector, labels, refundService);
   return { order, saved, audit, refunds, connector, labels, service, config, db, job, calls: () => ({ createCalls, cancelCalls }) };
 }
 test('UPS GIF conversion emits actual 4x6 PDF with original pixel image and no FedEx crop', async () => {
@@ -61,9 +62,9 @@ test('unknown create never retries; credential failure never sends Shipping', as
   const h2 = harness(); h2.connector.getAccessToken = async () => { throw new UpsRequestError('OAUTH', false, 401, 'tx', 'AUTH', 'denied'); };
   await assert.rejects(h2.service.create('order1')); assert.equal(h2.calls().createCalls, 0); assert.equal(h2.audit[0].requestPayload.shippingRequestSent, false);
 });
-test('whole-shipment cancellation is explicit and creates one finance task without wallet change', async () => {
+test('whole-shipment cancellation is explicit and completes one refund', async () => {
   const h = harness(); await h.service.create('order1');
-  const result = await h.service.cancel('order1', 'admin'); assert.equal(result.cancelled, true); assert.equal(h.order.shipmentStatus, 'CANCELLED'); assert.equal(h.refunds.size, 1);
+  const result = await h.service.cancel('order1', 'admin'); assert.equal(result.cancelled, true); assert.equal(result.refunded, true); assert.equal(h.order.shipmentStatus, 'CANCELLED'); assert.equal(h.order.feeStatus, 'REFUNDED'); assert.equal(h.refunds.size, 1);
   await assert.rejects(h.service.cancel('order1'), /不可取消/); assert.equal(h.calls().cancelCalls, 1); assert.equal(h.refunds.size, 1);
 });
 test('partial/unknown cancellation is not success and never creates refund; modified environment blocked', async () => {

@@ -15,11 +15,12 @@ function fixture(boxCount: number) {
   const prisma: any = {
     order: {
       findUnique: async () => order,
-      updateMany: async () => { calls.push('claim'); return { count: 1 }; },
-      update: async () => { calls.push('saved'); },
+      updateMany: async ({ data }: any) => { calls.push('claim'); Object.assign(order, data); return { count: 1 }; },
+      update: async ({ data }: any) => { calls.push('saved'); Object.assign(order, data); },
     },
     connectorCallLog: { create: async ({ data }: any) => { calls.push(`log:${data.operation}`); } },
     shipmentLabel: { createMany: async () => { calls.push('labels'); } },
+    shipmentDispatchJob: { updateMany: async () => { calls.push('dispatch'); } },
     $transaction: async (action: (tx: any) => Promise<void>) => action(prisma),
   };
   const mapper: any = { buildShipment: async () => payload };
@@ -27,10 +28,12 @@ function fixture(boxCount: number) {
     getAccessToken: async () => ({ accessToken: 'test-token' }),
     validate: async () => { calls.push('validate'); return {}; },
     createShipment: async () => { calls.push('create'); return { output: { transactionShipments: [] } }; },
+    cancelShipment: async () => { calls.push('carrierCancel'); return { cancelledShipment: true }; },
     extractLabels: () => ({ masterTrackingNumber: 'tracking-1', labels: Array.from({ length: boxCount }, (_, index) => ({ trackingNumber: `tracking-${index + 1}`, contentType: 'application/pdf', encodedLabel: 'JVBERg==' })) }),
   };
   const config: any = { status: () => ({ configured: true, environment: 'PRODUCTION' }), assertReady: () => undefined };
-  return { service: new FedexValidationService(prisma, mapper, connector, config), calls };
+  const refunds: any = { assertRefundable: () => undefined, complete: async () => { calls.push('refund'); order.shipmentStatus = ShipmentStatus.CANCELLED; order.feeStatus = 'REFUNDED'; } };
+  return { service: new FedexValidationService(prisma, mapper, connector, config, refunds), calls, order, connector };
 }
 
 test('FedEx 多箱订单跳过单箱专用预校验并创建整票面单', async () => {
@@ -56,4 +59,25 @@ test('FedEx 手动预校验多箱订单时给出明确限制提示', async () =>
   const { service, calls } = fixture(8);
   await assert.rejects(() => service.validate('order-1'), BadRequestException);
   assert.equal(calls.includes('validate'), false);
+});
+
+test('FedEx 未出单的订单由管理员取消后立即退款，重复取消被拒绝', async () => {
+  const { service, calls, order } = fixture(8);
+  const result = await service.cancel('order-1', 'admin-1');
+  assert.equal(result.refunded, true);
+  assert.equal(order.shipmentStatus, ShipmentStatus.CANCELLED);
+  assert.equal(order.feeStatus, 'REFUNDED');
+  assert.equal(calls.filter((call) => call === 'refund').length, 1);
+  assert.equal(calls.includes('carrierCancel'), false);
+  await assert.rejects(() => service.cancel('order-1'));
+  assert.equal(calls.filter((call) => call === 'refund').length, 1);
+});
+
+test('FedEx 已出单的订单只在供应商明确确认取消后退款', async () => {
+  const { service, calls, order, connector } = fixture(1);
+  order.shipmentStatus = ShipmentStatus.GENERATED;
+  order.carrierTrackingNumber = 'tracking-1';
+  connector.cancelShipment = async () => { calls.push('carrierCancel'); return {}; };
+  await assert.rejects(() => service.cancel('order-1', 'admin-1'));
+  assert.equal(calls.includes('refund'), false);
 });

@@ -61,6 +61,7 @@ export class BillingAdminController {
   listReconciliations() { return this.billing.listReconciliations(); }
 
   @Get('cancellation-refunds')
+  /** 兼容新规则上线前已经产生的待退款记录；新取消订单直接在取消事务中退款。 */
   listCancellationRefunds() { return this.billing.listCancellationRefunds(); }
 
   @Post('cancellation-refunds/:caseId/confirm')

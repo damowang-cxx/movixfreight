@@ -14,6 +14,7 @@ import { ShipmentDispatchQueueService } from '../open-api/shipment-dispatch-queu
 import { ProductsModule } from '../products/products.module';
 import { LabelPdfService } from './label-pdf.service';
 import { TrackingModule } from '../tracking/tracking.module';
+import { CancellationRefundService } from './cancellation-refund.service';
 
-@Module({ imports: [PricingModule, BalanceAlertsModule, SettingsModule, ProductsModule, TrackingModule], controllers: [CustomerOrdersController, OrdersAdminController], providers: [UpsShipmentService, DpdShipmentService, UpsLabelService, ShipmentOperationsService, OrdersService, FedexValidationService, ShipmentDispatchQueueService, LabelPdfService], exports: [UpsShipmentService, DpdShipmentService, UpsLabelService, ShipmentOperationsService, OrdersService, FedexValidationService, ShipmentDispatchQueueService, LabelPdfService] })
+@Module({ imports: [PricingModule, BalanceAlertsModule, SettingsModule, ProductsModule, TrackingModule], controllers: [CustomerOrdersController, OrdersAdminController], providers: [CancellationRefundService, UpsShipmentService, DpdShipmentService, UpsLabelService, ShipmentOperationsService, OrdersService, FedexValidationService, ShipmentDispatchQueueService, LabelPdfService], exports: [UpsShipmentService, DpdShipmentService, UpsLabelService, ShipmentOperationsService, OrdersService, FedexValidationService, ShipmentDispatchQueueService, LabelPdfService] })
 export class OrdersModule {}

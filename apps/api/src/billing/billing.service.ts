@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { ActualDataSource, CancellationRefundStatus, CustomerStatus, FeeStatus, MeasurementMethod, Prisma, ReconciliationStatus, SupplierBillImportStatus, SupplierBillMatchStatus, WalletLedgerType } from '@prisma/client';
+import { ActualDataSource, CancellationRefundStatus, CustomerStatus, FeeStatus, MeasurementMethod, Prisma, ReconciliationStatus, ShipmentStatus, SupplierBillImportStatus, SupplierBillMatchStatus, WalletLedgerType } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { BalanceAlertsService } from '../balance-alerts/balance-alerts.service';
@@ -88,6 +88,8 @@ export class BillingService {
       for (const line of matched) {
         const existing = await tx.orderReconciliation.findUnique({ where: { orderId: line.orderId! } });
         if (existing) throw new ConflictException('订单已存在待确认或已完成的对账记录，不能重复导入');
+        const order = await tx.order.findUniqueOrThrow({ where: { id: line.orderId! }, select: { shipmentStatus: true, feeStatus: true, prechargedAmount: true } });
+        if (order.shipmentStatus === ShipmentStatus.CANCELLED || order.feeStatus === FeeStatus.REFUNDED) throw new ConflictException('已取消或已退款订单不能应用供应商账单');
         await tx.order.update({
           where: { id: line.orderId! },
           data: {
@@ -102,7 +104,7 @@ export class BillingService {
           data: {
             orderId: line.orderId!,
             sourceLineId: line.id,
-            prechargedAmount: (await tx.order.findUniqueOrThrow({ where: { id: line.orderId! }, select: { prechargedAmount: true } })).prechargedAmount,
+            prechargedAmount: order.prechargedAmount,
             currency: batch.currency,
             createdById,
           },
@@ -149,6 +151,7 @@ export class BillingService {
       const item = await tx.cancellationRefundCase.findUnique({ where: { id: caseId }, include: { order: { include: { customer: { include: { wallets: true } } } } } });
       if (!item) throw new NotFoundException('取消退款待办不存在');
       if (item.status !== CancellationRefundStatus.PENDING_FINANCE_CONFIRMATION) throw new ConflictException('该取消退款待办已处理，不能重复确认');
+      if (item.order.shipmentStatus !== ShipmentStatus.CANCELLED || item.order.feeStatus === FeeStatus.REFUNDED) throw new ConflictException('只有已取消且未退款的历史订单可以处理该退款记录');
       if (!input.approved) return tx.cancellationRefundCase.update({ where: { id: caseId }, data: { status: CancellationRefundStatus.REJECTED, confirmedById, confirmationNote: input.confirmationNote, confirmedAt: new Date() } });
       const wallet = item.order.customer.wallets.find((value) => value.currency === item.currency);
       if (!wallet) throw new NotFoundException('客户对应币种的钱包不存在');
@@ -196,6 +199,7 @@ export class BillingService {
       });
       if (!reconciliation) throw new NotFoundException('对账记录不存在');
       if (reconciliation.status !== ReconciliationStatus.PENDING_FINANCE_CONFIRMATION) throw new ConflictException('该对账记录已处理，不能重复确认');
+      if (reconciliation.order.shipmentStatus === ShipmentStatus.CANCELLED || reconciliation.order.feeStatus === FeeStatus.REFUNDED) throw new ConflictException('已取消或已退款订单不能再次调整余额');
       if (reconciliation.order.currency !== reconciliation.currency) throw new ConflictException('订单与对账币种不一致，无法确认');
       const wallet = reconciliation.order.customer.wallets.find((item) => item.currency === reconciliation.currency);
       if (!wallet) throw new NotFoundException('客户对应币种的钱包不存在');
@@ -254,6 +258,7 @@ export class BillingService {
     if (!trackingNumber) return { ...data, matchStatus: SupplierBillMatchStatus.UNMATCHED, matchMessage: '账单行缺少运单号' };
     const order = await this.prisma.order.findUnique({ where: { carrierTrackingNumber: trackingNumber }, include: { service: true, reconciliation: true } });
     if (!order) return { ...data, matchStatus: SupplierBillMatchStatus.UNMATCHED, matchMessage: '未找到对应系统订单' };
+    if (order.shipmentStatus === ShipmentStatus.CANCELLED || order.feeStatus === FeeStatus.REFUNDED) return { ...data, matchStatus: SupplierBillMatchStatus.UNMATCHED, matchMessage: '订单已取消或退款，不参与供应商账单对账' };
     if (channelId && order.service.supplierId !== channelId) return { ...data, matchStatus: SupplierBillMatchStatus.CHANNEL_MISMATCH, matchMessage: '运单所属供应商与导入供应商不一致', order: { connect: { id: order.id } } };
     if (order.reconciliation) return { ...data, matchStatus: SupplierBillMatchStatus.ALREADY_RECONCILING, matchMessage: '订单已有对账记录', order: { connect: { id: order.id } } };
     return { ...data, matchStatus: SupplierBillMatchStatus.MATCHED, matchMessage: '已匹配订单，待应用', order: { connect: { id: order.id } } };

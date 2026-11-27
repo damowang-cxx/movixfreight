@@ -4,10 +4,11 @@ import { PrismaService } from '../database/prisma.service';
 import { DpdRelayConfig, type DpdRelayProfile } from '../connectors/dpd-relay.config';
 import { DpdRelayConnector, DpdRequestError, DPD_PATHS } from '../connectors/dpd-relay.connector';
 import { buildDpdShipment, dpdPdf, dpdRejection, dpdSuccess } from '../connectors/dpd-relay.mapper';
+import { CancellationRefundService, withCancellationTransaction } from './cancellation-refund.service';
 
 @Injectable()
 export class DpdShipmentService {
-  constructor(private readonly prisma: PrismaService, private readonly config: DpdRelayConfig, private readonly connector: DpdRelayConnector) {}
+  constructor(private readonly prisma: PrismaService, private readonly config: DpdRelayConfig, private readonly connector: DpdRelayConnector, private readonly refunds: CancellationRefundService) {}
   private async load(id: string) {
     const order = await this.prisma.order.findUnique({ where: { id }, include: { service: { include: { supplier: true } }, boxes: { include: { items: true } } } });
     if (!order) throw new NotFoundException('订单不存在');
@@ -81,6 +82,7 @@ export class DpdShipmentService {
   }
   async cancel(id: string, operatorId?: string) {
     const { order, profile } = await this.load(id);
+    this.refunds.assertRefundable(order);
     const local = order.shipmentStatus === 'SUBMITTED' || order.shipmentStatus === 'FAILED';
     if (!local && order.shipmentStatus !== 'GENERATED') throw new ConflictException('订单正在处理、结果未知或已交运，需人工核查');
     if (!local && !order.carrierTrackingNumber) throw new ConflictException('缺少渠道 AWBNo，不能作废');
@@ -95,13 +97,12 @@ export class DpdShipmentService {
         status = result.status; response = result.body;
         if (String(result.body?.Response?.StatusCode) !== '0') throw new DpdRequestError('CANCEL', true, result.status, 'CANCEL_UNCONFIRMED', '渠道未明确确认作废，请人工核查');
       }
-      await this.prisma.$transaction(async tx => {
-        await tx.order.update({ where: { id }, data: { shipmentStatus: 'CANCELLED', feeStatus: 'RECONCILIATION_PENDING' } });
-        await tx.cancellationRefundCase.upsert({ where: { orderId: id }, update: {}, create: { orderId: id, currency: order.currency, refundAmount: order.prechargedAmount, createdById: operatorId } });
-        await tx.shipmentDispatchJob.updateMany({ where: { orderId: id }, data: { status: 'COMPLETED', stage: 'CANCELLED', publicMessage: '订单已取消，等待会计确认退款', completedAt: new Date() } });
+      await withCancellationTransaction(this.prisma, async tx => {
+        await this.refunds.complete(tx, order, operatorId);
+        await tx.shipmentDispatchJob.updateMany({ where: { orderId: id }, data: { status: 'COMPLETED', stage: 'CANCELLED', publicMessage: '订单已取消，预扣款已退回余额', completedAt: new Date() } });
         await tx.connectorCallLog.create({ data: { orderId: id, driverCode: 'DPD_RELAY_UK', operation: 'CANCEL_SHIPMENT', status: 'SUCCESS', httpStatus: status, requestPayload: { path: local ? null : DPD_PATHS.CANCEL, AWBNo: order.carrierTrackingNumber, operatorId }, responsePayload: this.auditResponse(response, profile) } });
       });
-      return { orderId: id, cancelled: true, supplierCancelled: !local, requiresFinanceRefund: true };
+      return { orderId: id, cancelled: true, supplierCancelled: !local, refunded: true };
     } catch (error) {
       const unknown = sent && (!(error instanceof DpdRequestError) || error.unknown);
       await this.prisma.order.updateMany({ where: { id, shipmentStatus: 'GENERATING' }, data: { shipmentStatus: unknown ? 'UNKNOWN' : order.shipmentStatus } });

@@ -1,13 +1,14 @@
 import { BadGatewayException, BadRequestException, ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
-import { ConnectorCallStatus, ConnectorOperation, FeeStatus, Prisma, ShipmentStatus } from '@prisma/client';
+import { ConnectorCallStatus, ConnectorOperation, Prisma, ShipmentStatus } from '@prisma/client';
 import { FedexRelayConfig } from '../connectors/fedex-relay.config';
 import { FedexRelayConnector } from '../connectors/fedex-relay.connector';
 import { FedexRelayMapper } from '../connectors/fedex-relay.mapper';
 import { PrismaService } from '../database/prisma.service';
+import { CancellationRefundService, withCancellationTransaction } from './cancellation-refund.service';
 
 @Injectable()
 export class FedexValidationService {
-  constructor(private readonly prisma: PrismaService, private readonly mapper: FedexRelayMapper, private readonly connector: FedexRelayConnector, private readonly config: FedexRelayConfig) {}
+  constructor(private readonly prisma: PrismaService, private readonly mapper: FedexRelayMapper, private readonly connector: FedexRelayConnector, private readonly config: FedexRelayConfig, private readonly refunds: CancellationRefundService) {}
 
   async validate(orderId: string) {
     const order = await this.load(orderId);
@@ -73,11 +74,12 @@ export class FedexValidationService {
 
   /**
    * 系统订单尚未向承运商成功创建时，可直接标记取消；已经生成面单的订单则必须由
-   * FedEx 明确确认取消。网络超时或未知结果绝不自动重试，也不会自动退款。
+   * FedEx 明确确认取消。网络超时或未知结果绝不自动重试或退款。
    */
   async cancel(orderId: string, createdById?: string) {
     const order = await this.load(orderId);
     this.assertFedexChannel(order);
+    this.refunds.assertRefundable(order);
     if (order.shipmentStatus === ShipmentStatus.RECEIVED) throw new ConflictException('订单已收货，不能取消运单');
     if (order.shipmentStatus === ShipmentStatus.GENERATING) throw new ConflictException('订单正在生成面单，请稍后再试');
     if (order.shipmentStatus === ShipmentStatus.UNKNOWN) throw new ConflictException('供应商处理结果未知，禁止自动取消，请人工向供应商核查');
@@ -85,11 +87,19 @@ export class FedexValidationService {
     if (order.shipmentStatus === ShipmentStatus.RETURNED) throw new ConflictException('退件订单不能通过 FedEx 取消接口处理');
 
     if (order.shipmentStatus === ShipmentStatus.SUBMITTED || order.shipmentStatus === ShipmentStatus.FAILED) {
-      const claim = await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: { in: [ShipmentStatus.SUBMITTED, ShipmentStatus.FAILED] } }, data: { shipmentStatus: ShipmentStatus.CANCELLED } });
+      const claim = await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: order.shipmentStatus }, data: { shipmentStatus: ShipmentStatus.GENERATING } });
       if (claim.count !== 1) throw new ConflictException('订单状态已变化，请刷新后重试');
-      await this.log(orderId, ConnectorOperation.CANCEL_SHIPMENT, ConnectorCallStatus.SUCCESS, { localOnly: true, reason: '尚未取得有效 FedEx 面单' }, { cancelledShipment: true, mode: 'LOCAL' });
-      await this.createCancellationRefund(orderId, createdById);
-      return { orderId, cancelled: true, supplierCancelled: false, requiresFinanceRefund: true };
+      try {
+        await withCancellationTransaction(this.prisma, async (tx) => {
+          await this.refunds.complete(tx, order, createdById);
+          await tx.connectorCallLog.create({ data: { orderId, driverCode: 'FEDEX_RELAY', operation: ConnectorOperation.CANCEL_SHIPMENT, status: ConnectorCallStatus.SUCCESS, requestPayload: { localOnly: true, reason: '尚未取得有效 FedEx 面单' }, responsePayload: { cancelledShipment: true, mode: 'LOCAL' } } });
+          await tx.shipmentDispatchJob.updateMany({ where: { orderId }, data: { status: 'COMPLETED', stage: 'CANCELLED', publicMessage: '订单已取消，预扣款已退回余额', completedAt: new Date() } });
+        });
+        return { orderId, cancelled: true, supplierCancelled: false, refunded: true };
+      } catch (error) {
+        await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: ShipmentStatus.GENERATING }, data: { shipmentStatus: order.shipmentStatus } });
+        throw error;
+      }
     }
 
     if (order.shipmentStatus !== ShipmentStatus.GENERATED) throw new ConflictException('当前订单状态不允许取消');
@@ -104,12 +114,12 @@ export class FedexValidationService {
       cancelRequestSent = true;
       const response = await this.connector.cancelShipment(token.accessToken, order.carrierTrackingNumber, order.service.supplier.code);
       if (!this.isCancellationConfirmed(response)) throw new BadGatewayException({ message: 'FedEx 未返回明确的取消成功标识，订单已标记为结果未知，请人工核查', status: 502 });
-      await this.prisma.$transaction(async (tx) => {
-        await tx.order.update({ where: { id: orderId }, data: { shipmentStatus: ShipmentStatus.CANCELLED, feeStatus: FeeStatus.RECONCILIATION_PENDING } });
-        await tx.cancellationRefundCase.create({ data: { orderId, currency: order.currency, refundAmount: order.prechargedAmount, createdById } });
+      await withCancellationTransaction(this.prisma, async (tx) => {
+        await this.refunds.complete(tx, order, createdById);
         await tx.connectorCallLog.create({ data: { orderId, driverCode: 'FEDEX_RELAY', operation: ConnectorOperation.CANCEL_SHIPMENT, status: ConnectorCallStatus.SUCCESS, httpStatus: 200, requestPayload: requestPayload as Prisma.InputJsonValue, responsePayload: response as Prisma.InputJsonValue } });
+        await tx.shipmentDispatchJob.updateMany({ where: { orderId }, data: { status: 'COMPLETED', stage: 'CANCELLED', publicMessage: '订单已取消，预扣款已退回余额', completedAt: new Date() } });
       });
-      return { orderId, cancelled: true, supplierCancelled: true, requiresFinanceRefund: true };
+      return { orderId, cancelled: true, supplierCancelled: true, refunded: true };
     } catch (error) {
       // OAuth 失败时尚未把取消请求发给供应商，订单仍然可以安全地再次取消。
       // 一旦已发出取消请求却超时或收到未知响应，不能猜测结果，更不能自动重试。
@@ -143,14 +153,6 @@ export class FedexValidationService {
 
   private isCancellationConfirmed(response: any) {
     return response?.output?.cancelledShipment === true || response?.cancelledShipment === true || response?.output?.shipment?.cancelledShipment === true;
-  }
-
-  private async createCancellationRefund(orderId: string, createdById?: string) {
-    const order = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId }, select: { currency: true, prechargedAmount: true } });
-    await this.prisma.$transaction(async (tx) => {
-      await tx.order.update({ where: { id: orderId }, data: { feeStatus: FeeStatus.RECONCILIATION_PENDING } });
-      await tx.cancellationRefundCase.upsert({ where: { orderId }, update: {}, create: { orderId, currency: order.currency, refundAmount: order.prechargedAmount, createdById } });
-    });
   }
 
   private message(error: unknown) {

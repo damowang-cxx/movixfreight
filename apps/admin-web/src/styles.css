@@ -54,6 +54,9 @@ body { margin: 0; min-width: 1180px; }
 .order-list-panel .order-filter { margin: 10px 0 14px; padding: 10px; }
 .order-list-panel .order-filter .ant-input, .order-list-panel .order-filter .ant-select-selector, .order-list-panel .order-filter .ant-btn { font-size: 12px; }
 .order-list-panel .order-filter .ant-input, .order-list-panel .order-filter .ant-select-single { min-height: 30px; }
+.order-batch-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 14px; border: 1px solid #dbe8ef; border-radius: 10px; background: #f5fafc; }
+.order-batch-bar .ant-typography { margin: 0; font-size: 12px; }
+@media (max-width: 700px) { .order-batch-bar { align-items: flex-start; flex-direction: column; } }
 .order-list-table { overflow: hidden; border: 1px solid #e3ebf2; border-radius: 10px; background: #fff; }
 .order-list-table .ant-table { font-size: 12px; }
 .order-list-table .ant-table-container { border-inline: 0 !important; border-start-start-radius: 10px !important; border-start-end-radius: 10px !important; }

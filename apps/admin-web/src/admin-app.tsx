@@ -3,16 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppstoreOutlined, BarChartOutlined, DeleteOutlined, FileTextOutlined, HomeOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, TeamOutlined, TruckOutlined, WalletOutlined } from '@ant-design/icons';
 import { Alert, AutoComplete, Avatar, Button, Card, Checkbox, Col, Descriptions, Divider, Drawer, Dropdown, Form, Input, InputNumber, Layout, Menu, Modal, Row, Select, Space, Spin, Statistic, Table, Tag, Typography, Upload, message } from 'antd';
-import type { MenuProps } from 'antd';
+import type { MenuProps, TableProps } from 'antd';
 import * as XLSX from 'xlsx';
 import { RechargePanel } from './recharge-panel';
 import { useAppVersion } from './use-app-version';
 import { openCustomerAssist } from './customer-assist';
 import { errorText, showDispatchError, showDispatchFailures, showOperationError } from './error-dialog';
+import { cancelOrdersSequentially, type BatchCancelItem } from './order-batch';
 
 const { Header, Sider, Content } = Layout;
 const API = import.meta.env.VITE_API_BASE ?? '/api';
-const EMPTY_ADMIN_DATA = { status: null, drivers: [], carriers: [], suppliers: [], services: [], customers: [], customerLevels: [], customerGroups: [], orders: [], countries: [], costs: [], profits: [], profitServices: [], remoteTemplates: [], bills: [], reconciliations: [], cancellationRefunds: [], alertSettings: [], alertNotifications: [], settings: null, declarationFields: null, labelTemplates: { templates: [], capabilities: [] } };
+const EMPTY_ADMIN_DATA = { status: null, drivers: [], carriers: [], suppliers: [], services: [], customers: [], customerLevels: [], customerGroups: [], orders: [], countries: [], costs: [], profits: [], profitServices: [], remoteTemplates: [], bills: [], reconciliations: [], alertSettings: [], alertNotifications: [], settings: null, declarationFields: null, labelTemplates: { templates: [], capabilities: [] } };
 type Tab = { key: string; label: string };
 type Context = { data: any; request: (path: string, options?: RequestInit) => Promise<Response>; refresh: () => Promise<void>; logout: () => void; alertedDispatches: { current: Set<string> }; };
 
@@ -93,11 +94,11 @@ export function AdminApp() {
   const refresh = useCallback(async () => {
     if (!token) return; setLoading(true);
     try {
-      const paths = ['/admin/v1/products/fedex-relay-status', '/admin/v1/products/connector-drivers', '/admin/v1/products/carriers', '/admin/v1/products/suppliers', '/admin/v1/products/services', '/admin/v1/products/remote-templates', '/admin/v1/customers', '/admin/v1/customers/levels', '/admin/v1/customers/groups', '/admin/v1/orders', '/admin/v1/pricing/countries', '/admin/v1/pricing/cost-tables', '/admin/v1/pricing/profit-versions', '/admin/v1/pricing/profit-services', '/admin/v1/billing/imports', '/admin/v1/billing/reconciliations', '/admin/v1/billing/cancellation-refunds', '/admin/v1/balance-alerts/settings', '/admin/v1/balance-alerts/notifications', '/admin/v1/settings/me', '/admin/v1/settings/declaration-fields', '/admin/v1/settings/label-templates'];
+      const paths = ['/admin/v1/products/fedex-relay-status', '/admin/v1/products/connector-drivers', '/admin/v1/products/carriers', '/admin/v1/products/suppliers', '/admin/v1/products/services', '/admin/v1/products/remote-templates', '/admin/v1/customers', '/admin/v1/customers/levels', '/admin/v1/customers/groups', '/admin/v1/orders', '/admin/v1/pricing/countries', '/admin/v1/pricing/cost-tables', '/admin/v1/pricing/profit-versions', '/admin/v1/pricing/profit-services', '/admin/v1/billing/imports', '/admin/v1/billing/reconciliations', '/admin/v1/balance-alerts/settings', '/admin/v1/balance-alerts/notifications', '/admin/v1/settings/me', '/admin/v1/settings/declaration-fields', '/admin/v1/settings/label-templates'];
       const result = await Promise.all(paths.map(async (path) => (await request(path)).json()));
       if (activeToken.current !== token) return;
-      const [status, drivers, carriers, suppliers, services, remoteTemplates, customers, customerLevels, customerGroups, orders, countries, costs, profits, profitServices, bills, reconciliations, cancellationRefunds, alertSettings, alertNotifications, settings, declarationFields, labelTemplates] = result;
-      setData({ status, drivers, carriers, suppliers, services, remoteTemplates, customers, customerLevels, customerGroups, orders, countries, costs, profits, profitServices, bills, reconciliations, cancellationRefunds, alertSettings, alertNotifications, settings, declarationFields, labelTemplates });
+      const [status, drivers, carriers, suppliers, services, remoteTemplates, customers, customerLevels, customerGroups, orders, countries, costs, profits, profitServices, bills, reconciliations, alertSettings, alertNotifications, settings, declarationFields, labelTemplates] = result;
+      setData({ status, drivers, carriers, suppliers, services, remoteTemplates, customers, customerLevels, customerGroups, orders, countries, costs, profits, profitServices, bills, reconciliations, alertSettings, alertNotifications, settings, declarationFields, labelTemplates });
       if (settings.hasAvatar) {
         const avatar = await request('/admin/v1/settings/avatar');
         const nextUrl = URL.createObjectURL(await avatar.blob());
@@ -615,6 +616,14 @@ function CreateOrderFlow({ data, request, refresh }: Context) {
 function OrderListManagement({ data, request, refresh, alertedDispatches }: Context) {
   const [busy, setBusy] = useState(''); const [detail, setDetail] = useState<any>(null); const [filters, setFilters] = useState<any>({}); const [dispatchUpdates, setDispatchUpdates] = useState<Record<string, any>>({}); const [preview, setPreview] = useState<{ filename: string; url?: string; error?: string; loading?: boolean } | null>(null); const [cancellingOrder, setCancellingOrder] = useState<any>(null); const [cancelError, setCancelError] = useState<string | null>(null); const previewFrameRef = useRef<HTMLIFrameElement>(null); const orderRowsRef = useRef<any[]>([]);
   const [trackingDetail, setTrackingDetail] = useState<any>(null); const [trackingBusy, setTrackingBusy] = useState(false); const [trackingUpdates, setTrackingUpdates] = useState<Record<string, any>>({});
+  const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(30); const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [copyOrders, setCopyOrders] = useState<any[] | null>(null); const [batchItems, setBatchItems] = useState<BatchCancelItem[] | null>(null); const [batchStarted, setBatchStarted] = useState(false); const [batchRunning, setBatchRunning] = useState(false); const [batchRefreshError, setBatchRefreshError] = useState(''); const batchRunningRef = useRef(false);
+  const updateFilters = (next: any) => { setFilters(next); setPage(1); setSelectedIds([]); };
+  const copyValues = async (values: string[], label: string) => {
+    if (!values.length) { message.warning(`所选订单没有可复制的${label}`); return; }
+    try { await navigator.clipboard.writeText(values.join(' ')); message.success(`已复制 ${values.length} 个${label}`); }
+    catch (error) { showOperationError(error, `${label}复制失败`); }
+  };
   const cancel = (order: any) => { setCancelError(null); setCancellingOrder(order); };
   const closePreview = () => setPreview((current) => { if (current?.url) URL.revokeObjectURL(current.url); return null; });
   const print = async (order: any, label: any) => { const filename = labelFilename(label); closePreview(); setPreview({ filename, loading: true }); try { const blob = await asLabelBlob(await request(`/admin/v1/orders/${order.id}/labels/${label.id}/inline`)); const header = new Uint8Array(await blob.slice(0, 4).arrayBuffer()); const isPdf = blob.type.toLowerCase().includes('pdf') || String.fromCharCode(...header) === '%PDF'; if (!isPdf) throw new Error('供应商返回的面单不是 PDF，无法在当前页面预览。请下载文件后核对输出格式。'); setPreview({ filename, url: URL.createObjectURL(new Blob([blob], { type: 'application/pdf' })) }); } catch (error) { setPreview(null); showOperationError(error, '面单预览失败'); } };
@@ -630,14 +639,14 @@ function OrderListManagement({ data, request, refresh, alertedDispatches }: Cont
     setCancelError(null);
     try {
       const result = await (await request(`/admin/v1/orders/${order.id}/cancel`, { method: 'POST' })).json();
-      message.success(result.supplierCancelled ? '承运商已确认取消，等待会计处理退款' : '订单已取消，等待会计处理退款');
+      message.success(result.supplierCancelled ? '承运商已确认取消，预扣款已退回客户余额' : '订单已取消，预扣款已退回客户余额');
       setCancellingOrder(null);
       await refresh();
       if (detail?.id === order.id) await openDetail(order.id);
     } catch (error) {
       const reason = errorText(error);
       setCancelError(reason);
-      showOperationError(reason, `订单 ${order.orderNo} · 取消未确认`, '请先核查承运商取消结果，确认前不要重复操作。');
+      showOperationError(reason, `订单 ${order.orderNo} · 取消或退款未完成`, '如已发出承运商取消请求，请先核查供应商结果，不要重复操作。');
       await refresh().catch(() => undefined);
       if (detail?.id === order.id) await openDetail(order.id);
     } finally {
@@ -645,6 +654,45 @@ function OrderListManagement({ data, request, refresh, alertedDispatches }: Cont
     }
   };
   const orders = (data.orders ?? []).filter((order: any) => { const keyword = String(filters.keyword ?? '').trim().toLowerCase(); return (!keyword || [order.orderNo, order.carrierTrackingNumber, order.customer?.username, order.supplierRouteSnapshot?.supplierName, order.service?.name, order.recipientCountryCode].some((value) => String(value ?? '').toLowerCase().includes(keyword))) && (!filters.status || order.shipmentStatus === filters.status) && (!filters.serviceId || order.service?.id === filters.serviceId) && (!filters.customerId || order.customer?.id === filters.customerId) && (!filters.environment || order.service?.supplier?.environment === filters.environment); }).map((order: any) => ({ ...order, dispatch: dispatchUpdates[order.id] ?? order.dispatch, tracking: trackingUpdates[order.id] ?? order.tracking }));
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(orders.length / pageSize)));
+  const pageOrders = orders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const selectedOrders = pageOrders.filter((order: any) => selectedIds.includes(order.id));
+  const openBatchCancel = () => {
+    if (!selectedOrders.length) return;
+    setBatchItems(selectedOrders.map((order: any) => ({ id: order.id, orderNo: order.orderNo, carrierTrackingNumber: order.carrierTrackingNumber, status: 'PENDING' })));
+    setBatchStarted(false); setBatchRefreshError('');
+  };
+  const startBatchCancel = async () => {
+    if (!batchItems?.length || batchRunningRef.current || batchStarted) return;
+    batchRunningRef.current = true; setBatchRunning(true); setBatchStarted(true);
+    try {
+      await cancelOrdersSequentially(batchItems, async (item) => {
+        let response: Response;
+        try { response = await request(`/admin/v1/orders/${item.id}/cancel`, { method: 'POST' }); }
+        catch (error) {
+          if (error instanceof TypeError) throw new Error('网络未返回取消结果；请核查订单及承运商状态，不要重复取消');
+          throw error;
+        }
+        const result = await response.json().catch(() => { throw new Error('取消请求已发出但响应无法解析；请核查订单状态，不要重复取消'); });
+        if (result.cancelled !== true) throw new Error('服务器未确认订单取消成功，请核查后处理');
+      }, setBatchItems);
+      setSelectedIds([]);
+      try { await refresh(); }
+      catch (error) { setBatchRefreshError(`订单列表刷新失败：${errorText(error)}`); }
+    } finally { batchRunningRef.current = false; setBatchRunning(false); }
+  };
+  const failedBatchItems = batchItems?.filter((item) => item.status === 'FAILED') ?? [];
+  const completedBatchCount = batchItems?.filter((item) => item.status === 'SUCCESS' || item.status === 'FAILED').length ?? 0;
+  const orderRowSelection: TableProps<any>['rowSelection'] = {
+    selectedRowKeys: selectedIds,
+    onChange: (keys) => setSelectedIds(keys.map(String)),
+    onCell: () => ({ onClick: (event) => event.stopPropagation() }),
+    columnWidth: 42,
+  };
+  const orderPagination: TableProps<any>['pagination'] = {
+    current: currentPage, pageSize, showSizeChanger: true, pageSizeOptions: [30, 50, 100],
+    onChange: (nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize); setSelectedIds([]); },
+  };
   const hasPendingDispatch = orders.some(isPendingDispatch);
   useEffect(() => { orderRowsRef.current = orders; }, [orders]);
   useEffect(() => {
@@ -685,9 +733,39 @@ function OrderListManagement({ data, request, refresh, alertedDispatches }: Cont
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, [request]);
   return <section className="workspace-panel order-list-panel"><Typography.Title level={2}>订单列表</Typography.Title><Typography.Paragraph type="secondary">点击订单查看收件信息、箱货申报、费用、面单及供应商调用记录。</Typography.Paragraph>
-    <div className="order-filter"><Row gutter={12}><Col span={7}><Input value={filters.keyword} onChange={(event) => setFilters({ ...filters, keyword: event.target.value })} placeholder="订单号、运单号、客户、服务或国家" allowClear /></Col><Col span={4}><Select allowClear placeholder="订单状态" value={filters.status} onChange={(value) => setFilters({ ...filters, status: value })} style={{ width: '100%' }} options={['SUBMITTED', 'GENERATING', 'GENERATED', 'RECEIVED', 'RETURNED', 'CANCELLED', 'FAILED', 'UNKNOWN'].map((value) => ({ value, label: shipmentStatusLabel(value) }))} /></Col><Col span={4}><Select allowClear placeholder="客户" value={filters.customerId} onChange={(value) => setFilters({ ...filters, customerId: value })} style={{ width: '100%' }} options={(data.customers ?? []).map((item: any) => ({ value: item.id, label: item.username }))} /></Col><Col span={4}><Select allowClear placeholder="服务" value={filters.serviceId} onChange={(value) => setFilters({ ...filters, serviceId: value })} style={{ width: '100%' }} options={(data.services ?? []).map((item: any) => ({ value: item.id, label: item.name }))} /></Col><Col span={3}><Select allowClear placeholder="渠道环境" value={filters.environment} onChange={(value) => setFilters({ ...filters, environment: value })} style={{ width: '100%' }} options={[{ value: 'SANDBOX' }, { value: 'PRODUCTION' }]} /></Col><Col span={2}><Button onClick={() => setFilters({})}>重置</Button></Col></Row></div>
-    <Table className="order-list-table" size="small" rowKey="id" dataSource={orders} scroll={{ x: 2290 }} pagination={{ pageSize: 30, showSizeChanger: true, pageSizeOptions: [30, 50, 100] }} onRow={(record: any) => ({ onClick: () => void openDetail(record.id), style: { cursor: 'pointer' } })} columns={[{ title: '运单号', dataIndex: 'orderNo', width: 180 }, { title: '转单号', dataIndex: 'carrierTrackingNumber', width: 150, render: (value) => value ?? '—' }, { title: '客户', width: 110, render: (_, order: any) => order.customer?.username }, { title: '服务', width: 150, render: (_, order: any) => order.service?.name }, { title: '尾程渠道', width: 100, render: (_, order: any) => order.service?.supplier?.carrier?.name }, { title: '环境', width: 95, render: (_, order: any) => <Tag color={order.service?.supplier?.environment === 'PRODUCTION' ? 'green' : 'blue'}>{order.service?.supplier?.environment}</Tag> }, { title: '收件国家', width: 90, dataIndex: 'recipientCountryCode' }, { title: '预扣', width: 105, render: (_, order: any) => `${order.currency} ${order.prechargedAmount}` }, { title: '订单状态', width: 125, dataIndex: 'shipmentStatus', render: (value) => <Tag>{shipmentStatusLabel(value)}</Tag> }, { title: '面单生成状态', width: 145, render: (_, order: any) => <Tag color={order.dispatch?.status === 'READY' ? 'green' : ['FAILED', 'UNKNOWN', 'STALLED', 'BLOCKED'].includes(order.dispatch?.status) ? 'red' : 'processing'}>{dispatchStatusLabel(order.dispatch?.status)}</Tag> }, { title: '轨迹状态', width: 170, render: (_, order: any) => <div className="tracking-list-cell"><Tag color={trackingStatusColor(order.tracking?.status)}>{trackingStatusLabel(order.shipmentStatus === 'CANCELLED' ? 'CANCELLED' : order.tracking?.status)}</Tag><small>{order.tracking?.lastSyncedAt ? new Date(order.tracking.lastSyncedAt).toLocaleString() : '尚未同步'}</small></div> }, { title: '生成说明', width: 275, render: (_, order: any) => ['FAILED', 'UNKNOWN', 'STALLED', 'BLOCKED'].includes(order.dispatch?.status) ? <Space direction="vertical" size={0}><span>{order.dispatch?.message ?? '面单未生成'}</span><Button size="small" type="link" onClick={(event) => { event.stopPropagation(); showDispatchError(order); }}>查看原因</Button></Space> : order.dispatch?.message ?? '订单已受理，等待面单生成' }, { title: '费用状态', width: 145, dataIndex: 'feeStatus', render: (value) => <Tag>{feeStatusLabel(value)}</Tag> }, { title: '操作', width: 230, fixed: 'right', render: (_, order: any) => <Space onClick={(event) => event.stopPropagation()}>{order.connectorCapabilities?.cancel && <Button danger size="small" disabled={!['SUBMITTED', 'FAILED', 'GENERATED'].includes(order.shipmentStatus)} loading={busy === `cancel-${order.id}`} onClick={() => cancel(order)}>取消运单</Button>}{order.service?.supplier?.driverCode === 'DPD_RELAY_UK' && order.carrierTrackingNumber && ['UNKNOWN', 'GENERATED'].includes(order.shipmentStatus) && <Button size="small" loading={busy === 'print-' + order.id} onClick={() => void reprintDpd(order)}>渠道补打面单</Button>}{order.labels?.map((label: any) => <Space.Compact key={label.id}><Button size="small" onClick={() => void print(order, label)}>预览/打印 PDF</Button><Button size="small" onClick={() => void download(order, label)}>下载 PDF</Button></Space.Compact>)}</Space> }]} />
+    <div className="order-filter"><Row gutter={12}><Col span={7}><Input value={filters.keyword} onChange={(event) => updateFilters({ ...filters, keyword: event.target.value })} placeholder="订单号、运单号、客户、服务或国家" allowClear /></Col><Col span={4}><Select allowClear placeholder="订单状态" value={filters.status} onChange={(value) => updateFilters({ ...filters, status: value })} style={{ width: '100%' }} options={['SUBMITTED', 'GENERATING', 'GENERATED', 'RECEIVED', 'RETURNED', 'CANCELLED', 'FAILED', 'UNKNOWN'].map((value) => ({ value, label: shipmentStatusLabel(value) }))} /></Col><Col span={4}><Select allowClear placeholder="客户" value={filters.customerId} onChange={(value) => updateFilters({ ...filters, customerId: value })} style={{ width: '100%' }} options={(data.customers ?? []).map((item: any) => ({ value: item.id, label: item.username }))} /></Col><Col span={4}><Select allowClear placeholder="服务" value={filters.serviceId} onChange={(value) => updateFilters({ ...filters, serviceId: value })} style={{ width: '100%' }} options={(data.services ?? []).map((item: any) => ({ value: item.id, label: item.name }))} /></Col><Col span={3}><Select allowClear placeholder="渠道环境" value={filters.environment} onChange={(value) => updateFilters({ ...filters, environment: value })} style={{ width: '100%' }} options={[{ value: 'SANDBOX' }, { value: 'PRODUCTION' }]} /></Col><Col span={2}><Button onClick={() => updateFilters({})}>重置</Button></Col></Row></div>
+    <div className="order-batch-bar">
+      <Space wrap size={10}>
+        <Typography.Text>本页已选 <b>{selectedOrders.length}</b> 票</Typography.Text>
+        <Button disabled={!selectedOrders.length || batchRunning} onClick={() => setCopyOrders([...selectedOrders])}>复制</Button>
+        <Button danger disabled={!selectedOrders.length || batchRunning} onClick={openBatchCancel}>取消</Button>
+        {selectedOrders.length > 0 && <Button type="link" onClick={() => setSelectedIds([])}>清空选择</Button>}
+      </Space>
+      <Typography.Text type="secondary">表头勾选框选择当前页</Typography.Text>
+    </div>
+    <Table className="order-list-table" size="small" rowKey="id" dataSource={orders} rowSelection={orderRowSelection} scroll={{ x: 2350 }} pagination={orderPagination} onRow={(record: any) => ({ onClick: () => void openDetail(record.id), style: { cursor: 'pointer' } })} columns={[{ title: '运单号', dataIndex: 'orderNo', width: 180 }, { title: '转单号', dataIndex: 'carrierTrackingNumber', width: 150, render: (value) => value ?? '—' }, { title: '客户', width: 110, render: (_, order: any) => order.customer?.username }, { title: '服务', width: 150, render: (_, order: any) => order.service?.name }, { title: '尾程渠道', width: 100, render: (_, order: any) => order.service?.supplier?.carrier?.name }, { title: '环境', width: 95, render: (_, order: any) => <Tag color={order.service?.supplier?.environment === 'PRODUCTION' ? 'green' : 'blue'}>{order.service?.supplier?.environment}</Tag> }, { title: '收件国家', width: 90, dataIndex: 'recipientCountryCode' }, { title: '预扣', width: 105, render: (_, order: any) => `${order.currency} ${order.prechargedAmount}` }, { title: '订单状态', width: 125, dataIndex: 'shipmentStatus', render: (value) => <Tag>{shipmentStatusLabel(value)}</Tag> }, { title: '面单生成状态', width: 145, render: (_, order: any) => <Tag color={order.dispatch?.status === 'READY' ? 'green' : ['FAILED', 'UNKNOWN', 'STALLED', 'BLOCKED'].includes(order.dispatch?.status) ? 'red' : 'processing'}>{dispatchStatusLabel(order.dispatch?.status)}</Tag> }, { title: '轨迹状态', width: 170, render: (_, order: any) => <div className="tracking-list-cell"><Tag color={trackingStatusColor(order.tracking?.status)}>{trackingStatusLabel(order.shipmentStatus === 'CANCELLED' ? 'CANCELLED' : order.tracking?.status)}</Tag><small>{order.tracking?.lastSyncedAt ? new Date(order.tracking.lastSyncedAt).toLocaleString() : '尚未同步'}</small></div> }, { title: '生成说明', width: 275, render: (_, order: any) => ['FAILED', 'UNKNOWN', 'STALLED', 'BLOCKED'].includes(order.dispatch?.status) ? <Space direction="vertical" size={0}><span>{order.dispatch?.message ?? '面单未生成'}</span><Button size="small" type="link" onClick={(event) => { event.stopPropagation(); showDispatchError(order); }}>查看原因</Button></Space> : order.dispatch?.message ?? '订单已受理，等待面单生成' }, { title: '费用状态', width: 145, dataIndex: 'feeStatus', render: (value) => <Tag>{feeStatusLabel(value)}</Tag> }, { title: '操作', width: 230, fixed: 'right', render: (_, order: any) => <Space onClick={(event) => event.stopPropagation()}>{order.connectorCapabilities?.cancel && <Button danger size="small" disabled={!['SUBMITTED', 'FAILED', 'GENERATED'].includes(order.shipmentStatus)} loading={busy === `cancel-${order.id}`} onClick={() => cancel(order)}>取消运单</Button>}{order.service?.supplier?.driverCode === 'DPD_RELAY_UK' && order.carrierTrackingNumber && ['UNKNOWN', 'GENERATED'].includes(order.shipmentStatus) && <Button size="small" loading={busy === 'print-' + order.id} onClick={() => void reprintDpd(order)}>渠道补打面单</Button>}{order.labels?.map((label: any) => <Space.Compact key={label.id}><Button size="small" onClick={() => void print(order, label)}>预览/打印 PDF</Button><Button size="small" onClick={() => void download(order, label)}>下载 PDF</Button></Space.Compact>)}</Space> }]} />
     <OrderDetailsDrawer detail={detail} tracking={trackingDetail} trackingBusy={trackingBusy} onRefreshTracking={refreshTracking} onClose={() => { setDetail(null); setTrackingDetail(null); }} onPrint={print} onDownload={download} onCancel={async (order) => cancel(order)} />
+    <Modal open={Boolean(copyOrders)} title={`复制所选运单 · ${copyOrders?.length ?? 0} 票`} footer={<Button onClick={() => setCopyOrders(null)}>关闭</Button>} onCancel={() => setCopyOrders(null)}>
+      <Typography.Paragraph type="secondary">号码之间用空格分隔。</Typography.Paragraph>
+      <Space direction="vertical" style={{ width: '100%' }}>
+        <Button block onClick={() => void copyValues((copyOrders ?? []).map((order) => order.orderNo).filter(Boolean), '运单号')}>复制运单号</Button>
+        <Button block disabled={!copyOrders?.some((order) => order.carrierTrackingNumber)} onClick={() => void copyValues((copyOrders ?? []).map((order) => order.carrierTrackingNumber).filter(Boolean), '转单号')}>复制转单号</Button>
+        {!!copyOrders?.some((order) => !order.carrierTrackingNumber) && <Typography.Text type="secondary">暂无转单号的订单会在复制转单号时跳过。</Typography.Text>}
+      </Space>
+    </Modal>
+    <Modal open={Boolean(batchItems)} title={`批量取消 · ${batchItems?.length ?? 0} 票`} width={820} closable={!batchRunning} maskClosable={!batchRunning} keyboard={!batchRunning} onCancel={() => { if (!batchRunning) setBatchItems(null); }} footer={<Space>
+      {batchStarted && !batchRunning && failedBatchItems.length > 0 && <Button onClick={() => void copyValues(failedBatchItems.map((item) => item.orderNo), '取消失败运单号')}>复制所有取消失败的运单号</Button>}
+      {batchStarted ? <Button disabled={batchRunning} onClick={() => setBatchItems(null)}>关闭</Button> : <><Button onClick={() => setBatchItems(null)}>返回</Button><Button type="primary" danger onClick={() => void startBatchCancel()}>确认批量取消</Button></>}
+    </Space>}>
+      <Alert type={batchStarted ? failedBatchItems.length ? 'warning' : 'info' : 'warning'} showIcon message={batchStarted ? `已处理 ${completedBatchCount} / ${batchItems?.length ?? 0} 票；成功 ${batchItems?.filter((item) => item.status === 'SUCCESS').length ?? 0} 票；失败 ${failedBatchItems.length} 票` : '确认后逐票取消'} description={batchStarted ? '失败的订单请根据下方原因核查，不会因其他订单成功而自动重试。' : '已生成面单的订单会请求承运商取消。每票明确取消成功后，系统会按当前退款规则退回预扣款。'} style={{ marginBottom: 14 }} />
+      <Table size="small" rowKey="id" dataSource={batchItems ?? []} pagination={false} scroll={{ y: 360 }} columns={[
+        { title: '运单号', dataIndex: 'orderNo', width: 190 },
+        { title: '转单号', dataIndex: 'carrierTrackingNumber', width: 160, render: (value: string | null) => value || '—' },
+        { title: '取消结果', dataIndex: 'status', width: 110, render: (value: BatchCancelItem['status']) => <Tag color={value === 'SUCCESS' ? 'success' : value === 'FAILED' ? 'error' : value === 'RUNNING' ? 'processing' : 'default'}>{value === 'SUCCESS' ? '成功' : value === 'FAILED' ? '失败' : value === 'RUNNING' ? '取消中' : '待处理'}</Tag> },
+        { title: '说明', dataIndex: 'error', render: (value: string | undefined, item: BatchCancelItem) => <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{value ?? (item.status === 'SUCCESS' ? '取消成功' : '—')}</span> },
+      ]} />
+      {batchRefreshError && <Alert type="warning" showIcon message={batchRefreshError} style={{ marginTop: 12 }} />}
+    </Modal>
     <Modal open={Boolean(preview)} title={`面单预览${preview?.filename ? ` · ${preview.filename}` : ''}`} width="min(1120px, calc(100vw - 48px))" style={{ top: 24 }} destroyOnClose onCancel={closePreview} footer={<Space><Button onClick={closePreview}>关闭</Button><Button type="primary" disabled={!preview?.url} onClick={printPreview}>打印 PDF</Button></Space>}>
       {preview?.loading && <div style={{ height: 640, display: 'grid', placeItems: 'center' }}><Spin tip="正在加载 PDF 面单…" /></div>}
       {preview?.error && <Alert type="error" showIcon message="面单无法预览" description={preview.error} />}
@@ -696,8 +774,8 @@ function OrderListManagement({ data, request, refresh, alertedDispatches }: Cont
     <Modal open={Boolean(cancellingOrder)} title="取消运单" okText="确认取消" cancelText="暂不取消" okButtonProps={{ danger: true }} confirmLoading={busy === `cancel-${cancellingOrder?.id}`} maskClosable={!busy.startsWith('cancel-')} keyboard={!busy.startsWith('cancel-')} onOk={() => void confirmCancel()} onCancel={() => { if (!busy.startsWith('cancel-')) { setCancelError(null); setCancellingOrder(null); } }}>
       <Space direction="vertical">
         <Typography.Text>{cancellingOrder?.shipmentStatus === 'GENERATED' ? `将向 ${cancellingOrder?.service?.supplier?.carrier?.name ?? '承运商'} 取消整票转单号 ${cancellingOrder.carrierTrackingNumber ?? '—'}。仅可取消尚未交运或收货的运单。` : '该订单尚未获得有效承运商面单，将仅取消系统订单。'}</Typography.Text>
-        <Typography.Text type="secondary">取消成功不会自动退款；预扣金额仍需在订单对账中由会计确认后处理。</Typography.Text>
-        {cancelError && <Alert type="error" showIcon message="承运商取消未确认" description={cancelError} />}
+        <Typography.Text type="secondary">取消成功后将立即退回预扣金额 {cancellingOrder?.currency} {cancellingOrder?.prechargedAmount} 至客户余额，并记录资金流水。</Typography.Text>
+        {cancelError && <Alert type="error" showIcon message="取消或退款未完成" description={cancelError} />}
       </Space>
     </Modal>
   </section>;
@@ -710,7 +788,7 @@ function OrderDetailsDrawer({ detail, tracking, trackingBusy, onRefreshTracking,
     <Card size="small" title={`箱货数据（${detail.boxes?.length ?? 0} 箱）`}><Table size="small" rowKey="id" pagination={false} dataSource={detail.boxes} expandable={{ expandedRowRender: (box: any) => <Table size="small" rowKey="id" pagination={false} dataSource={box.items} columns={[{ title: '中文品名', dataIndex: 'chineseName', render: (value) => value ?? '—' }, { title: '英文品名', dataIndex: 'englishName', render: (value) => value ?? '—' }, { title: '材质', dataIndex: 'material', render: (value) => value ?? '—' }, { title: '原产国', dataIndex: 'originCountryCode', render: (value) => value ?? '—' }, { title: 'HS 编码', dataIndex: 'harmonizedCode', render: (value) => value ?? '—' }, { title: '数量', dataIndex: 'quantity', render: (value) => value ?? '—' }, { title: '单价', dataIndex: 'unitDeclaredValue', render: (value) => value ?? '—' }, { title: '币种', dataIndex: 'declaredValueCurrency', render: (value) => value ?? '—' }]} /> }} columns={[{ title: '箱号', dataIndex: 'boxNo' }, { title: '箱运单号', dataIndex: 'carrierTrackingNumber', render: (value) => value ?? '—' }, { title: '实重 kg', dataIndex: 'weightKg' }, { title: '尺寸 cm', render: (_, box: any) => `${box.lengthCm} × ${box.widthCm} × ${box.heightCm}` }]} /></Card>
     <Card size="small" title="物流轨迹" extra={<Button size="small" loading={trackingBusy} disabled={!detail.carrierTrackingNumber || detail.shipmentStatus === 'CANCELLED'} onClick={() => void onRefreshTracking(detail.id)}>刷新轨迹</Button>}><Space direction="vertical" style={{ width: '100%' }}><Space><Tag color={trackingStatusColor(tracking?.status)}>{trackingStatusLabel(tracking?.status)}</Tag><Typography.Text type="secondary">最后同步：{tracking?.last_synced_at ? new Date(tracking.last_synced_at).toLocaleString() : '尚未同步'}</Typography.Text></Space>{tracking?.message && <Typography.Text type="secondary">{tracking.message}</Typography.Text>}{tracking?.technical_error && <Alert type="warning" showIcon message="轨迹同步诊断" description={tracking.technical_error} />}{tracking?.packages?.length ? tracking.packages.map((item: any) => <div className="tracking-package" key={item.tracking_number}><Space><b>{item.box_no ?? '整票'} · {item.tracking_number}</b><Tag color={trackingStatusColor(item.status)}>{trackingStatusLabel(item.status)}</Tag></Space>{item.events.length ? <div className="tracking-events">{item.events.map((event: any, index: number) => <div className="tracking-event" key={`${event.occurred_at}-${event.carrier_status_code}-${index}`}><time>{new Date(event.occurred_at).toLocaleString()}</time><div><b>{trackingStatusLabel(event.status)}</b> · {event.description}<small>{[event.city, event.state, event.country_code].filter(Boolean).join(' · ')}</small></div></div>)}</div> : <Typography.Text type="secondary">承运商暂未提供扫描记录</Typography.Text>}</div>) : <Typography.Text type="secondary">面单生成后，系统将自动同步承运商轨迹。</Typography.Text>}</Space></Card>
     <Card size="small" title="应收费用"><Table size="small" rowKey="id" pagination={false} dataSource={detail.feeLines} columns={[{ title: '费用项', dataIndex: 'feeType' }, { title: '金额', dataIndex: 'amount' }, { title: '币种', dataIndex: 'currency' }]} /></Card>
-    <Card size="small" title="面单与供应商调用"><Space direction="vertical" style={{ width: '100%' }}>{detail.labels?.length ? detail.labels.map((label: any) => <Space.Compact key={label.id}><Button onClick={() => void onPrint(detail, label)}>预览/打印 PDF · {label.box?.boxNo ?? ''} · {label.trackingNumber ?? '面单'}</Button><Button onClick={() => void onDownload(detail, label)}>下载 PDF</Button></Space.Compact>) : <Typography.Text type="secondary">{detail.dispatch?.message ?? '尚未生成面单'}</Typography.Text>}{detail.dispatch?.technicalDetail && <Alert type="error" showIcon message="自动面单任务诊断信息" description={detail.dispatch.technicalDetail} />}{detail.connectorCapabilities?.cancel && ['SUBMITTED', 'FAILED', 'GENERATED'].includes(detail.shipmentStatus) && <><Button danger onClick={() => onCancel(detail)}>取消运单</Button><Typography.Text type="secondary">已生成面单时将由承运商确认是否可取消；取消成功后不会自动退款，需会计确认。</Typography.Text></>}<Divider /><Table size="small" rowKey="id" pagination={false} dataSource={detail.connectorCalls} columns={[{ title: '操作', dataIndex: 'operation' }, { title: '结果', dataIndex: 'status', render: (value) => <Tag>{value}</Tag> }, { title: 'HTTP', dataIndex: 'httpStatus' }, { title: '时间', dataIndex: 'createdAt', render: (value) => value ? new Date(value).toLocaleString() : '' }, { title: '异常', dataIndex: 'errorMessage' }]} /></Space></Card>
+    <Card size="small" title="面单与供应商调用"><Space direction="vertical" style={{ width: '100%' }}>{detail.labels?.length ? detail.labels.map((label: any) => <Space.Compact key={label.id}><Button onClick={() => void onPrint(detail, label)}>预览/打印 PDF · {label.box?.boxNo ?? ''} · {label.trackingNumber ?? '面单'}</Button><Button onClick={() => void onDownload(detail, label)}>下载 PDF</Button></Space.Compact>) : <Typography.Text type="secondary">{detail.dispatch?.message ?? '尚未生成面单'}</Typography.Text>}{detail.dispatch?.technicalDetail && <Alert type="error" showIcon message="自动面单任务诊断信息" description={detail.dispatch.technicalDetail} />}{detail.connectorCapabilities?.cancel && ['SUBMITTED', 'FAILED', 'GENERATED'].includes(detail.shipmentStatus) && <><Button danger onClick={() => onCancel(detail)}>取消运单</Button><Typography.Text type="secondary">已生成面单时需承运商确认取消；取消成功即退回预扣款。</Typography.Text></>}<Divider /><Table size="small" rowKey="id" pagination={false} dataSource={detail.connectorCalls} columns={[{ title: '操作', dataIndex: 'operation' }, { title: '结果', dataIndex: 'status', render: (value) => <Tag>{value}</Tag> }, { title: 'HTTP', dataIndex: 'httpStatus' }, { title: '时间', dataIndex: 'createdAt', render: (value) => value ? new Date(value).toLocaleString() : '' }, { title: '异常', dataIndex: 'errorMessage' }]} /></Space></Card>
     {detail.connectorCalls?.some((call: any) => call.driverCode === 'DPD_RELAY_UK') && <Card size="small" title="DPD 接口请求与响应日志">
       <Typography.Text type="secondary">仅管理员可见；账号密码和面单附件已脱敏。旧订单可能没有完整响应记录。</Typography.Text>
       {detail.connectorCalls.filter((call: any) => call.driverCode === 'DPD_RELAY_UK').map((call: any) => <details key={call.id} style={{ marginTop: 12 }}>
@@ -913,10 +991,6 @@ function ReconciliationManagement({ data, request, refresh }: Context) {
   const [recalculating, setRecalculating] = useState<any>(null);
   const [latestResult, setLatestResult] = useState<any>(null);
   const [busy, setBusy] = useState(false);
-  const [refundAction, setRefundAction] = useState<{ item: any; approved: boolean } | null>(null);
-  const [refundBusy, setRefundBusy] = useState(false);
-  const [refundError, setRefundError] = useState('');
-  const [refundResult, setRefundResult] = useState<{ approved: boolean; orderNo: string; currency: string; amount: string } | null>(null);
   const confirm = async (value: any) => {
     if (!selected) return;
     try { setBusy(true); const result = await (await request(`/admin/v1/billing/reconciliations/${selected.id}/confirm`, { method: 'POST', body: JSON.stringify(value) })).json(); message.success(`对账已确认，余额差额 ${result.differenceAmount}`); setSelected(null); setLatestResult(null); await refresh(); } catch (error) { showOperationError(error); } finally { setBusy(false); }
@@ -931,29 +1005,7 @@ function ReconciliationManagement({ data, request, refresh }: Context) {
   };
   const recalcInitial = recalculating ? { asOfDate: String(recalculating.order?.createdAt ?? new Date().toISOString()).slice(0, 10), boxes: (recalculating.order?.boxes ?? []).map((box: any) => ({ boxId: box.id, finalChargeableWeightKg: box.finalChargeableWeightKg })) } : undefined;
   const suggestedAmount = latestResult?.calculatedAmount ?? selected?.recalculations?.[0]?.calculatedAmount ?? selected?.prechargedAmount;
-  const confirmCancellation = (item: any, approved: boolean) => { setRefundError(''); setRefundAction({ item, approved }); };
-  const submitCancellationRefund = async () => {
-    if (!refundAction || refundBusy) return;
-    const { item, approved } = refundAction;
-    setRefundBusy(true); setRefundError('');
-    try {
-      await request(`/admin/v1/billing/cancellation-refunds/${item.id}/confirm`, { method: 'POST', body: JSON.stringify({ approved }) });
-      setRefundAction(null);
-      setRefundResult({ approved, orderNo: item.order?.orderNo ?? item.orderId, currency: item.currency, amount: String(item.refundAmount) });
-      await refresh();
-    } catch (error) { setRefundError(errorText(error)); }
-    finally { setRefundBusy(false); }
-  };
   return <section className="workspace-panel"><Typography.Title level={2}>订单对账</Typography.Title><Alert className="status-alert" type="warning" showIcon message="重算不会调整余额；会计确认才会补扣或退款" description="默认按订单创建日期匹配成本、利润、燃油与服务附加费。按箱计价必须录入每一箱最终收费重。" />
-    <Modal title={refundAction?.approved ? '确认取消退款' : '拒绝取消退款'} open={Boolean(refundAction)} zIndex={1200} okText={refundAction?.approved ? '确认退款' : '确认拒绝'} cancelText="返回" okButtonProps={{ danger: refundAction?.approved === false }} confirmLoading={refundBusy} maskClosable={!refundBusy} keyboard={!refundBusy} onOk={() => { void submitCancellationRefund(); }} onCancel={() => { if (!refundBusy) { setRefundAction(null); setRefundError(''); } }}>
-      <Typography.Paragraph>订单：{refundAction?.item.order?.orderNo ?? refundAction?.item.orderId}</Typography.Paragraph>
-      <Typography.Paragraph>{refundAction?.approved ? `将向客户退回 ${refundAction.item.currency} ${refundAction.item.refundAmount}。` : '拒绝后订单保持已取消，预扣金额不退回。'}</Typography.Paragraph>
-      {refundError && <Alert type="error" showIcon message="操作未完成" description={<span style={{ whiteSpace: 'pre-wrap' }}>{refundError}</span>} />}
-    </Modal>
-    <Modal title={refundResult?.approved ? '取消退款已确认' : '取消退款已拒绝'} open={Boolean(refundResult)} zIndex={1200} okText="我知道了" onOk={() => setRefundResult(null)} onCancel={() => setRefundResult(null)} cancelButtonProps={{ style: { display: 'none' } }}>
-      {refundResult && <Typography.Paragraph>订单 {refundResult.orderNo}：{refundResult.approved ? `${refundResult.currency} ${refundResult.amount} 已退回客户余额并写入资金流水。` : '退款申请已拒绝，客户余额未调整。'}</Typography.Paragraph>}
-    </Modal>
-    <Card size="small" title="取消退款待办" style={{ marginBottom: 16 }}><Table size="small" rowKey="id" dataSource={data.cancellationRefunds} pagination={{ pageSize: 8 }} locale={{ emptyText: '暂无取消退款待办' }} columns={[{ title: '订单', render: (_: unknown, item: any) => item.order?.carrierTrackingNumber ?? item.order?.orderNo }, { title: '客户', render: (_: unknown, item: any) => item.order?.customer?.username }, { title: '退款金额', render: (_: unknown, item: any) => `${item.currency} ${item.refundAmount}` }, { title: '状态', dataIndex: 'status', render: (value: any) => <Tag>{value === 'PENDING_FINANCE_CONFIRMATION' ? '待会计确认' : value === 'CONFIRMED' ? '已退款' : '已拒绝'}</Tag> }, { title: '操作', render: (_: unknown, item: any) => item.status === 'PENDING_FINANCE_CONFIRMATION' ? <Space><Button size="small" type="primary" disabled={refundBusy} onClick={() => confirmCancellation(item, true)}>确认退款</Button><Button size="small" danger disabled={refundBusy} onClick={() => confirmCancellation(item, false)}>拒绝</Button></Space> : '—' }]} /></Card>
     <Table rowKey="id" dataSource={data.reconciliations} pagination={{ pageSize: 15 }} columns={[{ title: '订单', render: (_: unknown, item: any) => item.order?.carrierTrackingNumber ?? item.order?.orderNo }, { title: '客户', render: (_: unknown, item: any) => item.order?.customer?.username }, { title: '服务', render: (_: unknown, item: any) => item.order?.service?.name }, { title: '预扣金额', render: (_: unknown, item: any) => `${item.currency} ${item.prechargedAmount}` }, { title: '最近重算', render: (_: unknown, item: any) => item.recalculations?.[0] ? `${item.currency} ${item.recalculations[0].calculatedAmount}` : '—' }, { title: '最终应收', dataIndex: 'finalAmount', render: (value: any, item: any) => value == null ? '待确认' : `${item.currency} ${value}` }, { title: '状态', dataIndex: 'status', render: (value: any) => <Tag>{value}</Tag> }, { title: '操作', render: (_: unknown, item: any) => <Space><Button size="small" disabled={item.status !== 'PENDING_FINANCE_CONFIRMATION'} onClick={() => { setRecalculating(item); setLatestResult(null); }}>重算</Button><Button type="primary" size="small" disabled={item.status !== 'PENDING_FINANCE_CONFIRMATION'} onClick={() => { setSelected(item); setLatestResult(null); }}>会计确认</Button></Space> }]} />
     <Modal open={Boolean(recalculating)} destroyOnClose title="按实际收费重重算" footer={null} onCancel={() => setRecalculating(null)}><Form key={recalculating?.id} layout="vertical" initialValues={recalcInitial} onFinish={recalculate}><Form.Item name="asOfDate" label="计费日期" rules={[{ required: true }]} extra="默认订单创建日期，可改选其他计费日期"><Input type="date" /></Form.Item>{recalculating?.order?.service?.measurementMethod === 'PER_BOX' ? <><Alert type="info" showIcon message="按箱计价：必须填写每个箱号的最终收费重" /><Form.List name="boxes">{(fields) => <>{fields.map((field) => { const box = recalculating.order.boxes[field.name]; return <Row gutter={10} key={field.key}><Col span={12}><Form.Item label="箱号"><Input value={box?.boxNo} disabled /></Form.Item></Col><Col span={12}><Form.Item name={[field.name, 'finalChargeableWeightKg']} label="最终收费重 kg" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name={[field.name, 'boxId']} hidden><Input /></Form.Item></Col></Row>; })}</>}</Form.List></> : <Alert type="info" showIcon message={`按票计价：使用已从供应商账单回填的整票最终收费重 ${recalculating?.order?.finalChargeableWeightKg ?? '（尚未录入）'} kg`} />}<Button type="primary" htmlType="submit" loading={busy}>执行重算</Button></Form></Modal>
     <Modal open={Boolean(selected)} destroyOnClose title="确认最终应收" footer={null} onCancel={() => { setSelected(null); setLatestResult(null); }}><Typography.Paragraph>订单：{selected?.order?.carrierTrackingNumber ?? selected?.order?.orderNo}<br />预扣金额：{selected?.currency} {selected?.prechargedAmount}<br />{latestResult && <>最近重算：{selected?.currency} {latestResult.calculatedAmount}</>}</Typography.Paragraph><Form key={`${selected?.id}-${suggestedAmount}`} layout="vertical" initialValues={{ finalReceivableAmount: suggestedAmount }} onFinish={confirm}><Form.Item name="finalReceivableAmount" label="最终应收金额" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="confirmationNote" label="确认备注"><Input.TextArea rows={3} /></Form.Item><Button type="primary" htmlType="submit" loading={busy}>确认并调整余额</Button></Form></Modal>

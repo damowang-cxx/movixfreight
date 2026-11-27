@@ -5,6 +5,7 @@ import { UpsOfficialConfig } from '../connectors/ups-official.config';
 import { UpsOfficialConnector, UpsRequestError, UPS_SHIP_PATH, upsCancelPath } from '../connectors/ups-official.connector';
 import { buildUpsShipment } from '../connectors/ups-official.mapper';
 import { UpsLabelService } from './ups-label.service';
+import { CancellationRefundService, withCancellationTransaction } from './cancellation-refund.service';
 
 export function upsVoidConfirmed(body: any, trackingNumbers: string[]) {
   const r = body?.VoidShipmentResponse;
@@ -23,7 +24,7 @@ export function parseUpsShipment(body: any, count: number) {
 
 @Injectable()
 export class UpsShipmentService {
-  constructor(private readonly prisma: PrismaService, private readonly config: UpsOfficialConfig, private readonly connector: UpsOfficialConnector, private readonly labels: UpsLabelService) {}
+  constructor(private readonly prisma: PrismaService, private readonly config: UpsOfficialConfig, private readonly connector: UpsOfficialConnector, private readonly labels: UpsLabelService, private readonly refunds: CancellationRefundService) {}
   private async load(id: string) {
     const order = await this.prisma.order.findUnique({ where: { id }, include: { service: { include: { supplier: true } }, boxes: { include: { items: true } } } });
     if (!order) throw new NotFoundException('订单不存在');
@@ -77,6 +78,7 @@ export class UpsShipmentService {
   }
   async cancel(id: string, operatorId?: string) {
     const { order, profile } = await this.load(id);
+    this.refunds.assertRefundable(order);
     const local = order.shipmentStatus === 'SUBMITTED' || order.shipmentStatus === 'FAILED';
     if (!local && order.shipmentStatus !== 'GENERATED') throw new ConflictException('当前订单不可取消；正在处理、结果未知或已交运的订单需人工核查');
     if (!local && !order.carrierTrackingNumber) throw new ConflictException('缺少 UPS 整票运单号，不能取消');
@@ -90,13 +92,12 @@ export class UpsShipmentService {
         sent = true; result = await this.connector.cancel(profile, token, order.carrierTrackingNumber!);
         if (!upsVoidConfirmed(result.body, order.boxes.map(box => box.carrierTrackingNumber!).filter(Boolean))) throw new UpsRequestError('CANCEL', true, result.status, result.transactionId, 'UPS_CANCEL_UNCONFIRMED', '未明确确认整票取消，请人工核查');
       }
-      await this.prisma.$transaction(async tx => {
-        await tx.order.update({ where: { id }, data: { shipmentStatus: 'CANCELLED', feeStatus: 'RECONCILIATION_PENDING' } });
-        await tx.cancellationRefundCase.upsert({ where: { orderId: id }, update: {}, create: { orderId: id, currency: order.currency, refundAmount: order.prechargedAmount, createdById: operatorId } });
+      await withCancellationTransaction(this.prisma, async tx => {
+        await this.refunds.complete(tx, order, operatorId);
         await tx.connectorCallLog.create({ data: { orderId: id, driverCode: 'UPS_OFFICIAL', operation: 'CANCEL_SHIPMENT', status: 'SUCCESS', httpStatus: result?.status, requestPayload: { ...request, transactionId: result?.transactionId } as any, responsePayload: result ? this.redact(result.body, profile) : { cancelled: true, localOnly: true } } });
-        await tx.shipmentDispatchJob.updateMany({ where: { orderId: id }, data: { status: 'COMPLETED', stage: 'CANCELLED', publicMessage: '订单已取消，等待会计确认退款', completedAt: new Date() } });
+        await tx.shipmentDispatchJob.updateMany({ where: { orderId: id }, data: { status: 'COMPLETED', stage: 'CANCELLED', publicMessage: '订单已取消，预扣款已退回余额', completedAt: new Date() } });
       });
-      return { orderId: id, cancelled: true, supplierCancelled: !local, requiresFinanceRefund: true };
+      return { orderId: id, cancelled: true, supplierCancelled: !local, refunded: true };
     } catch (e) {
       const unknown = sent && (!(e instanceof UpsRequestError) || e.unknown);
       await this.prisma.order.updateMany({ where: { id, shipmentStatus: 'GENERATING' }, data: { shipmentStatus: unknown ? 'UNKNOWN' : order.shipmentStatus } });

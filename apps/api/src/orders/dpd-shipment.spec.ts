@@ -9,7 +9,7 @@ import { DpdShipmentService } from './dpd-shipment.service';
 const profile: DpdRelayProfile = { enabled: true, environment: 'sandbox', baseUrl: 'http://example.test', userId: 'USER', password: 'SECRET', customerCode: 'C01', vendorName: 'DPD', serviceName: 'UK', shipper: { name: 'Test Ltd', contact: 'AVA', address1: 'Unit 2', city: 'London', postcode: 'UB78JD', telephone: '441234567890' } };
 function harness(withPdf: boolean) {
   const config = new DpdRelayConfig({} as any); (config as any).profiles = () => ({ DPD_1: profile });
-  const order: any = { id: 'order1', orderNo: 'ORD-1', shipmentStatus: 'SUBMITTED', recipientName: 'Recipient', recipientPhone: '447700900123', recipientCountryCode: 'GB', recipientCity: 'London', recipientPostcode: 'SW1A 1AA', recipientAddressLine1: 'High Street 1', recipientAddressLine2: null, recipientAddressLine3: null, currency: 'GBP', prechargedAmount: new Prisma.Decimal(10), service: { enabled: true, supplier: { id: 'supplier1', code: 'DPD_1', environment: 'SANDBOX', driverCode: 'DPD_RELAY_UK', enabled: true } }, boxes: [{ id: 'box1', weightKg: new Prisma.Decimal(1), lengthCm: new Prisma.Decimal(10), widthCm: new Prisma.Decimal(10), heightCm: new Prisma.Decimal(10), items: [{ englishName: 'Book', quantity: 1, unitDeclaredValue: new Prisma.Decimal(5), declaredValueCurrency: 'GBP' }] }] };
+  const order: any = { id: 'order1', orderNo: 'ORD-1', shipmentStatus: 'SUBMITTED', feeStatus: 'PRECHARGED', recipientName: 'Recipient', recipientPhone: '447700900123', recipientCountryCode: 'GB', recipientCity: 'London', recipientPostcode: 'SW1A 1AA', recipientAddressLine1: 'High Street 1', recipientAddressLine2: null, recipientAddressLine3: null, currency: 'GBP', prechargedAmount: new Prisma.Decimal(10), service: { enabled: true, supplier: { id: 'supplier1', code: 'DPD_1', environment: 'SANDBOX', driverCode: 'DPD_RELAY_UK', enabled: true } }, boxes: [{ id: 'box1', weightKg: new Prisma.Decimal(1), lengthCm: new Prisma.Decimal(10), widthCm: new Prisma.Decimal(10), heightCm: new Prisma.Decimal(10), items: [{ englishName: 'Book', quantity: 1, unitDeclaredValue: new Prisma.Decimal(5), declaredValueCurrency: 'GBP' }] }] };
   order.supplierRouteSnapshot = { driverCode: 'DPD_RELAY_UK', supplierId: 'supplier1', supplierCode: 'DPD_1', environment: 'SANDBOX', accountFingerprint: config.accountFingerprint(profile), carrierServiceType: 'NDOC' };
   const audits: any[] = []; const labels: any[] = []; const refunds: any[] = []; let createCalls = 0;
   const db: any = {
@@ -23,7 +23,8 @@ function harness(withPdf: boolean) {
   };
   const pdf = Buffer.from('%PDF-1.4\n').toString('base64');
   const connector: any = { create: async () => { createCalls++; return { status: 200, body: { ResponseCode: 'RT01', Status: 'Success', ErrorCode: '0', AWBNo: 'AWB-1', RefNo: 'ORD-1', Pdfdownload: withPdf ? pdf : '' } }; }, print: async () => ({ status: 200, body: { ResponseCode: 'RT01', Status: 'Success', ErrorCode: '0', AWBNo: 'AWB-1', Pdfdownload: '' } }), cancel: async () => ({ status: 200, body: { Response: { Message: 'Success', StatusCode: '0' } } }) };
-  return { service: new DpdShipmentService(db, config, connector), connector, order, audits, labels, refunds, getCreateCalls: () => createCalls };
+  const refundService: any = { assertRefundable: () => undefined, complete: async () => { refunds.push({ orderId: order.id, createdById: 'operator1' }); order.shipmentStatus = 'CANCELLED'; order.feeStatus = 'REFUNDED'; } };
+  return { service: new DpdShipmentService(db, config, connector, refundService), connector, order, audits, labels, refunds, getCreateCalls: () => createCalls };
 }
 
 test('DPD creation stores one PDF and logs neither credentials nor label bytes', async () => {
@@ -88,13 +89,13 @@ test('DPD HTTP error keeps the supplier response and HTTP code in the call log',
   assert.equal(h.audits[0].responsePayload.errors[0].field, 'ServiceName');
 });
 
-test('DPD confirmed void creates a finance refund case without changing the precharge', async () => {
+test('DPD confirmed void completes refund with the cancellation', async () => {
   const h = harness(true);
   await h.service.create('order1');
   const result = await h.service.cancel('order1', 'operator1');
   assert.equal(result.supplierCancelled, true);
   assert.equal(h.order.shipmentStatus, 'CANCELLED');
-  assert.equal(h.order.feeStatus, 'RECONCILIATION_PENDING');
+  assert.equal(h.order.feeStatus, 'REFUNDED');
   assert.equal(h.order.prechargedAmount.toString(), '10');
   assert.equal(h.refunds.length, 1);
   assert.equal(h.refunds[0].createdById, 'operator1');
