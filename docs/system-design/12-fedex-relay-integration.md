@@ -25,6 +25,8 @@
 
 创建、校验等能力按 Ship-API Direct 的 FedEx 路径调用；取消则使用中转站明确提供的适配端点，不能套用 FedEx 原生 `DELETE` 路径。系统只对已生成、未标记为已收货的订单发起请求，国际多件订单以主转单号和 `DELETE_ALL_PACKAGES` 取消整票。中转商尚未提供的查单／轨迹接口仍不实现，不能猜测路径。
 
+FedEx 官方 [Ship API 文档](https://developer.fedex.com/api/en-ma/catalog/ship/v1/docs.html) 说明 `Validate Shipment` 仅支持单件。自动打单时，单箱先调用 Validate 再 Create；多箱只执行本地订单映射检查，然后以 `totalPackageCount`、`totalWeight` 和全部 `requestedPackageLineItems` 一次调用 Create，由 Create 校验并生成整票面单。管理员对多箱单独调用 Validate 时返回明确限制提示。
+
 ## 取消运单的系统规则
 
 - 管理员在“订单列表 → 订单详情”中对单票发起取消；`SUBMITTED`、明确 `FAILED` 的订单完成内部取消，`GENERATED` 的订单调用 FedEx；

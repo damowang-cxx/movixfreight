@@ -1,4 +1,4 @@
-import { BadGatewayException, ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConnectorCallStatus, ConnectorOperation, FeeStatus, Prisma, ShipmentStatus } from '@prisma/client';
 import { FedexRelayConfig } from '../connectors/fedex-relay.config';
 import { FedexRelayConnector } from '../connectors/fedex-relay.connector';
@@ -13,6 +13,7 @@ export class FedexValidationService {
     const order = await this.load(orderId);
     this.assertFedexChannel(order);
     const payload = await this.mapper.buildShipment(order);
+    if (order.boxes.length > 1) throw new BadRequestException('FedEx 预校验接口只支持单箱订单；多箱订单请使用创建面单接口，供应商会在创建时校验整票');
     try {
       const token = await this.connector.getAccessToken(order.service.supplier.code);
       const response = await this.connector.validate(token.accessToken, payload, order.service.supplier.code);
@@ -29,16 +30,20 @@ export class FedexValidationService {
     this.assertFedexChannel(order);
     if (order.shipmentStatus !== ShipmentStatus.SUBMITTED) throw new ConflictException('只有“已下单”的订单可以创建 FedEx 面单');
     const payload = await this.mapper.buildShipment(order);
-    try {
-      await onStage?.('VALIDATING');
-      const token = await this.connector.getAccessToken(order.service.supplier.code);
-      const validation = await this.connector.validate(token.accessToken, payload, order.service.supplier.code);
-      await this.log(orderId, ConnectorOperation.VALIDATE_SHIPMENT, ConnectorCallStatus.SUCCESS, payload, validation);
-    } catch (error) {
-      const status = this.isUnknown(error) ? ShipmentStatus.UNKNOWN : ShipmentStatus.FAILED;
-      await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: ShipmentStatus.SUBMITTED }, data: { shipmentStatus: status } });
-      await this.log(orderId, ConnectorOperation.VALIDATE_SHIPMENT, ConnectorCallStatus.FAILED, payload, undefined, this.message(error));
-      throw error;
+    // FedEx Validate Shipment only supports one package. The Create Shipment
+    // endpoint validates multi-piece shipments while creating their labels.
+    if (order.boxes.length === 1) {
+      try {
+        await onStage?.('VALIDATING');
+        const token = await this.connector.getAccessToken(order.service.supplier.code);
+        const validation = await this.connector.validate(token.accessToken, payload, order.service.supplier.code);
+        await this.log(orderId, ConnectorOperation.VALIDATE_SHIPMENT, ConnectorCallStatus.SUCCESS, payload, validation);
+      } catch (error) {
+        const status = this.isUnknown(error) ? ShipmentStatus.UNKNOWN : ShipmentStatus.FAILED;
+        await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: ShipmentStatus.SUBMITTED }, data: { shipmentStatus: status } });
+        await this.log(orderId, ConnectorOperation.VALIDATE_SHIPMENT, ConnectorCallStatus.FAILED, payload, undefined, this.message(error));
+        throw error;
+      }
     }
 
     const claim = await this.prisma.order.updateMany({ where: { id: orderId, shipmentStatus: ShipmentStatus.SUBMITTED }, data: { shipmentStatus: ShipmentStatus.GENERATING } });
