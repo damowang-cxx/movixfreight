@@ -8,5 +8,7 @@ export interface AuthPrincipal {
   audience: AuthAudience;
   roles: AdminRole[];
   customerStatus?: string;
+  assistedByAdminId?: string;
+  assistedByAdminUsername?: string;
 }
 

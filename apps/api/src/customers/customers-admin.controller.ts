@@ -8,6 +8,7 @@ import { CustomersService } from './customers.service';
 import type { RechargeImage } from './customers.service';
 import { CurrentUser, RequireAdminRoles } from '../auth/decorators';
 import type { AuthPrincipal } from '../auth/auth.types';
+import { AuthService } from '../auth/auth.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { WalletAdjustmentDto } from './dto/wallet-adjustment.dto';
 
@@ -19,7 +20,7 @@ class CustomerClassificationDto { @IsOptional() @IsString() customerLevelId?: st
 @RequireAdminRoles(AdminRole.SUPER_ADMIN, AdminRole.OPERATIONS, AdminRole.CUSTOMER_SERVICE, AdminRole.FINANCE, AdminRole.PRICING)
 @Controller('admin/v1/customers')
 export class CustomersAdminController {
-  constructor(private readonly customers: CustomersService) {}
+  constructor(private readonly customers: CustomersService, private readonly auth: AuthService) {}
 
   @Get()
   @ApiOperation({ summary: '客户列表' })
@@ -44,6 +45,13 @@ export class CustomersAdminController {
   @ApiOperation({ summary: '客户详情与最近资金流水' })
   get(@Param('customerId') customerId: string) {
     return this.customers.getById(customerId);
+  }
+
+  @Post(':customerId/assist-session')
+  @RequireAdminRoles(AdminRole.SUPER_ADMIN, AdminRole.OPERATIONS, AdminRole.CUSTOMER_SERVICE)
+  @ApiOperation({ summary: '为管理员创建 15 分钟客户协助会话' })
+  assistSession(@Param('customerId') customerId: string, @CurrentUser() operator: AuthPrincipal) {
+    return this.auth.issueCustomerAssistToken(operator, customerId);
   }
 
   @Patch(':customerId/classification') updateClassification(@Param('customerId') customerId: string, @Body() input: CustomerClassificationDto) { return this.customers.updateClassification(customerId, input); }

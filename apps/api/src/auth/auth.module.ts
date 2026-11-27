@@ -1,11 +1,12 @@
 import { Global, Module } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
-import { APP_GUARD, Reflector } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR, Reflector } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { ProductionRateLimitGuard } from './production-rate-limit.guard';
+import { CustomerAssistAuditInterceptor } from './customer-assist-audit.interceptor';
 
 @Global()
 @Module({
@@ -30,6 +31,7 @@ import { ProductionRateLimitGuard } from './production-rate-limit.guard';
       inject: [Reflector, JwtService],
     },
     { provide: APP_GUARD, useExisting: ProductionRateLimitGuard },
+    { provide: APP_INTERCEPTOR, useClass: CustomerAssistAuditInterceptor },
   ],
   exports: [AuthService],
 })

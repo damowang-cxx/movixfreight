@@ -10,6 +10,10 @@ import { useAppVersion } from './use-app-version';
 import { errorText, showDispatchError, showDispatchFailures, showOperationError } from './error-dialog';
 
 const API = import.meta.env.VITE_API_BASE ?? '/api';
+const assistNonce = new URLSearchParams(window.location.search).get('admin_assist');
+const assistMode = Boolean(assistNonce);
+const ASSIST_TOKEN_KEY = 'movix.customer.assist.token';
+const ASSIST_ADMIN_KEY = 'movix.customer.assist.admin';
 
 const shipmentStatusLabels: Record<string, string> = { SUBMITTED: '已下单', GENERATING: '面单生成中', GENERATED: '已生成面单', RECEIVED: '已收货', RETURNED: '已退件', CANCELLED: '已取消', FAILED: '面单生成失败', UNKNOWN: '面单生成结果未知' };
 const feeStatusLabels: Record<string, string> = { PRECHARGED: '已预扣（待最终确认）', FINAL_WEIGHT_PENDING: '最终收费重待确认', RECONCILIATION_PENDING: '待会计确认', RECONCILED: '已完成对账', REFUNDED: '已退款', ADJUSTED: '已调整' };
@@ -24,9 +28,11 @@ function labelPdfFilename(label: any) { return `label-${String(label.trackingNum
 function downloadPdf(blob: Blob, filename: string) { const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1_000); }
 
 function CustomerApp() {
-  const [token, setToken] = useState(() => localStorage.getItem('movix.customer.token') ?? '');
+  const [token, setToken] = useState(() => assistMode ? sessionStorage.getItem(ASSIST_TOKEN_KEY) ?? '' : localStorage.getItem('movix.customer.token') ?? '');
   const activeToken = useRef(token);
   const [initializing, setInitializing] = useState(Boolean(token));
+  const [assistedBy, setAssistedBy] = useState(() => assistMode ? sessionStorage.getItem(ASSIST_ADMIN_KEY) ?? '' : '');
+  const [assistEnded, setAssistEnded] = useState(false);
   const [bootstrapError, setBootstrapError] = useState('');
   const updateAvailable = useAppVersion();
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
@@ -46,11 +52,35 @@ function CustomerApp() {
     if (expectedToken && activeToken.current !== expectedToken) return;
     if (!activeToken.current) return;
     activeToken.current = '';
-    localStorage.removeItem('movix.customer.token');
+    if (assistMode) { sessionStorage.removeItem(ASSIST_TOKEN_KEY); sessionStorage.removeItem(ASSIST_ADMIN_KEY); setAssistEnded(true); }
+    else localStorage.removeItem('movix.customer.token');
     setToken(''); setAccount(null); setNotifications([]); setOrders([]); setSuppliers([]); setServices([]); setCountries([]); setDeclarationFields(null);
     setCreating(false); setImporting(false); setLoading(false); setInitializing(false); setBootstrapError('');
     if (expired) message.warning('登录已过期，请重新登录');
   }, []);
+  useEffect(() => {
+    if (!assistMode || !assistNonce || token || assistEnded) return;
+    const adminUrl = new URL('/', window.location.origin);
+    if (import.meta.env.DEV) adminUrl.port = String(Number(window.location.port) - 1);
+    const sendReady = () => window.opener?.postMessage({ type: 'MOVIX_CUSTOMER_ASSIST_READY', nonce: assistNonce }, adminUrl.origin);
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window.opener || event.origin !== adminUrl.origin || event.data?.type !== 'MOVIX_CUSTOMER_ASSIST_SESSION' || event.data?.nonce !== assistNonce) return;
+      const nextToken = event.data.accessToken;
+      if (typeof nextToken !== 'string' || !nextToken) return;
+      const adminName = String(event.data.assistedBy?.username ?? '管理员');
+      sessionStorage.setItem(ASSIST_TOKEN_KEY, nextToken);
+      sessionStorage.setItem(ASSIST_ADMIN_KEY, adminName);
+      activeToken.current = nextToken;
+      setAssistedBy(adminName);
+      setInitializing(true);
+      setToken(nextToken);
+      window.opener?.postMessage({ type: 'MOVIX_CUSTOMER_ASSIST_ACK', nonce: assistNonce }, adminUrl.origin);
+    };
+    window.addEventListener('message', onMessage);
+    sendReady();
+    const timer = window.setInterval(sendReady, 500);
+    return () => { window.clearInterval(timer); window.removeEventListener('message', onMessage); };
+  }, [assistEnded, token]);
   const request = useCallback(async (path: string, options: RequestInit = {}) => {
     const response = await fetch(`${API}${path}`, { ...options, headers: { Authorization: `Bearer ${token}`, ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
     if (!response.ok) {
@@ -142,18 +172,34 @@ function CustomerApp() {
     setBootstrapError(''); setInitializing(true);
     setToken(value);
   };
-  const logout = () => clearSession();
+  const logout = () => { clearSession(); if (assistMode) window.close(); };
   const versionNotice = updateAvailable && <><Alert banner showIcon type="warning" message="系统已发布新版本；刷新前请先保存正在填写的内容。" action={<Button size="small" onClick={() => setShowUpdateDialog(true)}>刷新页面</Button>} /><Modal open={showUpdateDialog} title="刷新到新版本？" okText="刷新页面" onOk={() => window.location.reload()} onCancel={() => setShowUpdateDialog(false)}>刷新将清空尚未提交的运单表单和导入预览。</Modal></>;
-  if (!token) return <>{versionNotice}<Login onSuccess={completeLogin} /></>;
+  if (!token) return assistMode ? <main className="customer-login"><Card title={assistEnded ? '协助会话已结束' : '正在连接客户协助会话'} style={{ width: 420 }}><Typography.Paragraph>{assistEnded ? '请返回管理员端重新打开客户首页。' : '请保持管理员端和此标签页打开；连接失败时返回管理员端重试。'}</Typography.Paragraph><Button onClick={() => window.close()}>关闭标签页</Button></Card></main> : <>{versionNotice}<Login onSuccess={completeLogin} /></>;
   if (initializing) return <>{versionNotice}<main className="customer-login"><Spin size="large" tip="正在验证登录状态"><div style={{ width: 280, height: 120 }} /></Spin></main></>;
   if (!account) return <>{versionNotice}<main className="customer-login"><Card title="暂时无法加载客户中心" style={{ width: 380 }}><Typography.Paragraph>{bootstrapError || '请检查网络连接后重试。'}</Typography.Paragraph><Space><Button type="primary" onClick={() => void refresh()}>重试</Button><Button onClick={logout}>重新登录</Button></Space></Card></main></>;
-  return <>{versionNotice}<Layout className="customer-layout"><header className="customer-header"><b><i>M</i> MOVIX FREIGHT</b><Space><Badge count={notifications.filter((item) => !item.readAt).length} size="small"><span className="customer-header__notice"><BellOutlined /> 消息</span></Badge><span>{account?.username ?? '客户自助中心'}</span>{account?.status !== 'FROZEN' && <Button icon={<FileExcelOutlined />} onClick={() => setImporting(true)}>Excel 批量导入</Button>}{account?.status !== 'FROZEN' && <Button type="primary" onClick={() => setCreating(true)}>创建运单</Button>}<Button type="text" icon={<LogoutOutlined />} onClick={logout}>退出</Button></Space></header><main className="customer-main"><Spin spinning={loading}><Portal account={account} notifications={notifications} orders={orders} request={request} refresh={refresh} /></Spin></main><Modal open={creating} footer={null} width={1060} destroyOnClose onCancel={() => setCreating(false)} title="创建运单"><CustomerOrderCreate suppliers={suppliers} countries={countries} declarationFields={declarationFields} request={request} onDone={async () => { setCreating(false); await refresh(); }} /></Modal><Modal open={importing} footer={null} width={1060} destroyOnClose onCancel={() => setImporting(false)} title="Excel 批量导入运单"><CustomerOrderImport services={services} request={request} onDone={refresh} /></Modal></Layout></>;
+  return <>{versionNotice}{assistMode && <Alert banner showIcon type="warning" message={`管理员 ${assistedBy || "正在协助"} 正在操作客户 ${account.username} 的账户`} description="协助会话有效期为 15 分钟；此标签页中的操作会使用该客户账户，结束后请点击右上角的结束协助。" />}<Layout className="customer-layout"><header className="customer-header"><b><i>M</i> MOVIX FREIGHT</b><Space><Badge count={notifications.filter((item) => !item.readAt).length} size="small"><span className="customer-header__notice"><BellOutlined /> 消息</span></Badge><span>{account?.username ?? '客户自助中心'}</span>{account?.status !== 'FROZEN' && <Button icon={<FileExcelOutlined />} onClick={() => setImporting(true)}>Excel 批量导入</Button>}{account?.status !== 'FROZEN' && <Button type="primary" onClick={() => setCreating(true)}>创建运单</Button>}<Button type="text" icon={<LogoutOutlined />} onClick={logout}>{assistMode ? "结束协助" : "退出"}</Button></Space></header><main className="customer-main"><Spin spinning={loading}><Portal account={account} notifications={notifications} orders={orders} request={request} refresh={refresh} /></Spin></main><Modal open={creating} footer={null} width={1060} destroyOnClose onCancel={() => setCreating(false)} title="创建运单"><CustomerOrderCreate suppliers={suppliers} countries={countries} declarationFields={declarationFields} request={request} onDone={async () => { setCreating(false); await refresh(); }} /></Modal><Modal open={importing} footer={null} width={1060} destroyOnClose onCancel={() => setImporting(false)} title="Excel 批量导入运单"><CustomerOrderImport services={services} request={request} onDone={refresh} /></Modal></Layout></>;
 }
 
 function Login({ onSuccess }: { onSuccess: (token: string) => void }) {
   const [busy, setBusy] = useState(false);
-  const submit = async (value: any) => { setBusy(true); try { const response = await fetch(`${API}/auth/customer/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }); const body = await response.json(); if (!response.ok) throw new Error(body.message || '登录失败'); onSuccess(body.accessToken); } catch (error) { showOperationError(error); } finally { setBusy(false); } };
-  return <main className="customer-login"><section className="customer-login__panel"><div className="customer-login__mark">M</div><span className="customer-login__eyebrow">MOVIX FREIGHT / CUSTOMER DESK</span><Typography.Title>登录客户中心</Typography.Title><Typography.Paragraph>查看账户余额、订单面单与重要提醒。</Typography.Paragraph><Form layout="vertical" onFinish={submit}><Form.Item name="username" label="用户名" rules={[{ required: true }]}><Input autoFocus /></Form.Item><Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password /></Form.Item><Button block type="primary" htmlType="submit" loading={busy}>登录</Button></Form></section></main>;
+  const [loginError, setLoginError] = useState('');
+  const [errorDialogOpen, setErrorDialogOpen] = useState(false);
+  const submit = async (value: { username: string; password: string }) => {
+    setBusy(true);
+    setLoginError('');
+    setErrorDialogOpen(false);
+    try {
+      const response = await fetch(`${API}/auth/customer/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+      const body = await response.json().catch(() => ({})) as { message?: string | string[]; accessToken?: string };
+      if (!response.ok) throw new Error(response.status === 401 ? '用户名或密码错误，请检查后重试。' : (Array.isArray(body.message) ? body.message.join('；') : body.message) || `登录失败（${response.status}）`);
+      if (!body.accessToken) throw new Error('登录响应缺少访问令牌，请稍后重试。');
+      onSuccess(body.accessToken);
+    } catch (error) {
+      setLoginError(error instanceof TypeError ? '网络连接失败，请检查网络后重试。' : errorText(error));
+      setErrorDialogOpen(true);
+    } finally { setBusy(false); }
+  };
+  return <main className="customer-login"><section className="customer-login__panel"><div className="customer-login__mark">M</div><span className="customer-login__eyebrow">MOVIX FREIGHT / CUSTOMER DESK</span><Typography.Title>登录客户中心</Typography.Title><Typography.Paragraph>查看账户余额、订单面单与重要提醒。</Typography.Paragraph><Form layout="vertical" onFinish={submit}><Form.Item name="username" label="用户名" rules={[{ required: true }]}><Input autoFocus /></Form.Item><Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password /></Form.Item><Button block type="primary" htmlType="submit" loading={busy}>登录</Button></Form>{loginError && <Alert type="error" showIcon message={loginError} style={{ marginTop: 16 }} />}</section><Modal title="登录失败" open={errorDialogOpen} okText="我知道了" onOk={() => setErrorDialogOpen(false)} onCancel={() => setErrorDialogOpen(false)} cancelButtonProps={{ style: { display: 'none' } }}><Typography.Text>{loginError}</Typography.Text></Modal></main>;
 }
 
 function CustomerOrderCreate({ suppliers, countries, declarationFields, request, onDone }: { suppliers: any[]; countries: any[]; declarationFields: any; request: (path: string, options?: RequestInit) => Promise<Response>; onDone: () => Promise<void> }) {
