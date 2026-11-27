@@ -123,9 +123,11 @@ export function CustomerOrderImport({ services, request, onDone }: Props) {
   const [validated, setValidated] = useState(false);
   const [importError, setImportError] = useState('');
   const [errorDialogOpen, setErrorDialogOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [completion, setCompletion] = useState<{ created: number; failures: ImportResult[] } | null>(null);
   const showImportError = (detail: string) => { setImportError(detail); setErrorDialogOpen(true); };
   const parseFile = async (file: File) => {
-    setRows([]); setResults([]); setCommitted(false); setValidated(false); setSourceFileName(''); setImportError(''); setErrorDialogOpen(false); setBusy(true);
+    setRows([]); setResults([]); setCommitted(false); setValidated(false); setSourceFileName(''); setImportError(''); setErrorDialogOpen(false); setConfirmOpen(false); setCompletion(null); setBusy(true);
     let parsedRows: ImportRow[] = [];
     try {
       if (!/\.xlsx?$/i.test(file.name)) throw new Error('请选择 .xlsx 或 .xls 文件');
@@ -163,29 +165,30 @@ export function CustomerOrderImport({ services, request, onDone }: Props) {
       await downloadTemplate(services, latest);
     } catch (error) { showImportError(errorText(error)); }
   };
-  const commit = () => Modal.confirm({
-    title: '确认批量创建订单',
-    content: `将创建 ${rows.length} 票订单，逐票预扣对应币种余额并自动进入面单生成队列。余额或线路若在预览后变化，部分订单可能失败。`,
-    okText: '确认创建', cancelText: '返回检查',
-    onOk: async () => {
-      setBusy(true);
-      try {
-        const result = await (await request('/customer/v1/orders/import/commit', { method: 'POST', body: JSON.stringify({ sourceFileName, rows }) })).json() as ImportResult[];
-        setResults(result); setCommitted(result.every((item) => item.status === 'CREATED'));
-        const created = result.filter((item) => item.status === 'CREATED').length;
-        const failures = result.filter((item) => item.status !== 'CREATED');
-        Modal[failures.length ? 'warning' : 'info']({ title: failures.length ? '部分订单导入失败' : 'Excel 导入结果', content: <Space direction="vertical"><div>成功 {created} 票，失败 {failures.length} 票。成功订单已预扣并等待面单生成。</div>{failures.slice(0, 5).map((item) => <div key={item.rowNo}>第 {item.rowNo} 行：{item.error ?? item.message ?? '请检查该订单'}</div>)}{failures.length > 5 && <div>其余失败原因请在下方结果表查看。</div>}</Space>, okText: '我知道了' });
-        await onDone();
-      } catch (error) { showImportError(errorText(error)); }
-      finally { setBusy(false); }
-    },
-  });
+  const commit = async () => {
+    setBusy(true);
+    try {
+      const result = await (await request('/customer/v1/orders/import/commit', { method: 'POST', body: JSON.stringify({ sourceFileName, rows }) })).json() as ImportResult[];
+      setResults(result); setCommitted(result.every((item) => item.status === 'CREATED'));
+      const created = result.filter((item) => item.status === 'CREATED').length;
+      const failures = result.filter((item) => item.status !== 'CREATED');
+      setConfirmOpen(false); setCompletion({ created, failures });
+      await onDone();
+    } catch (error) { setConfirmOpen(false); showImportError(errorText(error)); }
+    finally { setBusy(false); }
+  };
+  const requestCommit = () => {
+    if (!ready) { showImportError(rows.length ? '当前文件尚未全部通过预校验，请查看下方结果并重新选择文件。' : '请先选择 Excel 文件并完成预校验。'); return; }
+    setConfirmOpen(true);
+  };
   return <div className="customer-import">
     <Alert showIcon type="info" message="先解析预览，确认后才扣费" description="模板中每行是一条货品明细；相同导入订单号合并为一票。星号反映通用和系统设置的必填项；所选线路还可能要求额外字段；商品净重可留空。只有全部预校验通过才能提交。" />
     {importError && <Alert showIcon type="error" message="Excel 预校验或导入未完成" description={<span style={{ whiteSpace: 'pre-wrap' }}>{importError}</span>} style={{ marginTop: 12 }} />}
-    <Modal title="Excel 预校验或导入未完成" open={errorDialogOpen} zIndex={1100} okText="我知道了" onOk={() => setErrorDialogOpen(false)} onCancel={() => setErrorDialogOpen(false)} cancelButtonProps={{ style: { display: 'none' } }}><Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{importError}</Typography.Text></Modal>
+    <Modal title="Excel 预校验或导入未完成" open={errorDialogOpen} zIndex={1300} okText="我知道了" onOk={() => setErrorDialogOpen(false)} onCancel={() => setErrorDialogOpen(false)} cancelButtonProps={{ style: { display: 'none' } }}><Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{importError}</Typography.Text></Modal>
+    <Modal title="确认批量创建订单" open={confirmOpen} zIndex={1200} okText="确认创建" cancelText="返回检查" confirmLoading={busy} okButtonProps={{ disabled: !ready }} onOk={() => { void commit(); }} onCancel={() => setConfirmOpen(false)}>将创建 {rows.length} 票订单，逐票预扣对应币种余额并自动进入面单生成队列。余额或线路若在预览后变化，部分订单可能失败。</Modal>
+    <Modal title={completion?.failures.length ? '部分订单导入失败' : 'Excel 导入结果'} open={Boolean(completion)} zIndex={1200} okText="我知道了" onOk={() => setCompletion(null)} onCancel={() => setCompletion(null)} cancelButtonProps={{ style: { display: 'none' } }}>{completion && <Space direction="vertical"><div>成功 {completion.created} 票，失败 {completion.failures.length} 票。成功订单已预扣并等待面单生成。</div>{completion.failures.slice(0, 5).map((item) => <div key={item.rowNo}>第 {item.rowNo} 行：{item.error ?? item.message ?? '请检查该订单'}</div>)}{completion.failures.length > 5 && <div>其余失败原因请在下方结果表查看。</div>}</Space>}</Modal>
     <div className="customer-import__actions">
-      <Space wrap><Button icon={<DownloadOutlined />} onClick={() => { void downloadCurrentTemplate(); }}>下载 Excel 模板</Button><Upload accept=".xlsx,.xls" maxCount={1} showUploadList={false} beforeUpload={(file) => { void parseFile(file); return false; }}><Button type="primary" icon={<UploadOutlined />} loading={busy}>选择并预校验</Button></Upload><Button disabled={!ready || busy} onClick={commit}>{results.some((item) => item.status === 'CREATED') ? '重试未成功订单' : `确认创建 ${rows.length || ''} 票订单`}</Button></Space>
+      <Space wrap><Button icon={<DownloadOutlined />} onClick={() => { void downloadCurrentTemplate(); }}>下载 Excel 模板</Button><Upload accept=".xlsx,.xls" maxCount={1} showUploadList={false} beforeUpload={(file) => { void parseFile(file); return false; }}><Button type="primary" icon={<UploadOutlined />} loading={busy}>选择并预校验</Button></Upload><Button disabled={busy || committed} onClick={requestCommit}>{committed ? '已全部创建' : results.some((item) => item.status === 'CREATED') ? '重试未成功订单' : `确认创建 ${rows.length || ''} 票订单`}</Button></Space>
       {sourceFileName && <Typography.Text type="secondary">当前文件：{sourceFileName}</Typography.Text>}
     </div>
     <Card size="small" className="customer-import__services" title="可用服务代码"><Space wrap>{services.length ? services.map((service) => <Tag key={service.code}>{service.name} · {service.code}</Tag>) : <Typography.Text type="secondary">暂无可下单服务</Typography.Text>}</Space></Card>
