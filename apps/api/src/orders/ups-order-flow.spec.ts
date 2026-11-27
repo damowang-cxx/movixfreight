@@ -16,15 +16,15 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 
 function orderHarness() {
-  const wallet = { id: 'wallet1', currency: 'EUR', balance: new Prisma.Decimal(100) }; let saved: any; const ledgers: any[] = []; let enqueues = 0; let quotes = 0;
+  const wallet = { id: 'wallet1', currency: 'EUR', balance: new Prisma.Decimal(100) }; let saved: any; const savedOrders: any[] = []; const ledgers: any[] = []; let enqueues = 0; let quotes = 0;
   const requiredFields = new Set<string>();
   const pricing: any = { resolveDestinationCountry: async (v: string) => v === '荷兰' ? 'NL' : v.toUpperCase(), quote: async () => { quotes++; return { total: '10', currency: 'EUR' }; } };
   const resolved: any = { shipperCountryCode: 'BE', accountFingerprint: 'hash', supplier: { id: 'supplier1', code: 'UPS1', driverCode: 'UPS_OFFICIAL', environment: 'PRODUCTION' }, service: { id: 'service1', code: 'UPS_STANDARD', minPieces: 1, allowsMultiPiece: true, measurementMethod: 'PER_BOX' }, route: { id: 'route1', code: 'STANDARD', routeType: 'DEFAULT', carrierServiceType: '11', fieldSchema: routeFieldSchema('UPS_OFFICIAL', 'NONE', {}) } };
   const products: any = { resolveOrderRoute: async (_id: string, country: string, allowSandbox: boolean) => { if (country !== 'NL' || resolved.supplier.environment === 'SANDBOX' && !allowSandbox) throw new Error('无可用路由'); return resolved; }, resolvePublicServiceRoute: async (_id: string, country: string) => { if (!['NL', '荷兰'].includes(country) || resolved.supplier.environment !== 'PRODUCTION') throw new Error('服务不可用'); return resolved; } };
-  const db: any = { order: { findUnique: async ({ where }: any) => saved?.idempotencyKey === where.idempotencyKey ? saved : null, findUniqueOrThrow: async () => saved, create: async ({ data }: any) => saved = { id: 'order1', ...data } }, service: { findUnique: async ({ where }: any) => where.code === 'UPS_STANDARD' ? { id: 'service1' } : null, findFirst: async () => ({ id: 'service1', supplierId: 'supplier1' }) }, openApiIdempotencyRecord: { findUnique: async () => null, create: async () => ({}) }, customer: { findUnique: async () => ({ id: 'customer1', status: 'NORMAL', wallets: [wallet] }) }, customerWallet: { update: async ({ data }: any) => Object.assign(wallet, data) }, walletLedger: { create: async ({ data }: any) => ledgers.push(data) }, $transaction: async (cb: any, options: any) => { assert.equal(options.isolationLevel, 'Serializable'); return cb(db); } };
+  const db: any = { order: { findUnique: async ({ where }: any) => savedOrders.find((order) => order.idempotencyKey === where.idempotencyKey || order.id === where.id) ?? null, findFirst: async ({ where }: any) => [...savedOrders].reverse().find((order) => order.customerId === where.customerId && order.idempotencyKey.startsWith(where.idempotencyKey.startsWith)) ?? null, findUniqueOrThrow: async () => saved, create: async ({ data }: any) => { saved = { id: `order${savedOrders.length + 1}`, ...data }; savedOrders.push(saved); return saved; } }, service: { findUnique: async ({ where }: any) => where.code === 'UPS_STANDARD' ? { id: 'service1' } : null, findFirst: async () => ({ id: 'service1', supplierId: 'supplier1' }) }, openApiIdempotencyRecord: { findUnique: async () => null, create: async () => ({}) }, customer: { findUnique: async () => ({ id: 'customer1', status: 'NORMAL', wallets: [wallet] }) }, customerWallet: { update: async ({ data }: any) => Object.assign(wallet, data) }, walletLedger: { create: async ({ data }: any) => ledgers.push(data) }, $transaction: async (cb: any, options: any) => { assert.equal(options.isolationLevel, 'Serializable'); return cb(db); } };
   const svc = new OrdersService(db, pricing, { evaluateInTransaction: async () => {} } as any, { requiredDeclarationFields: async () => [...requiredFields] } as any, products, { enqueue: async () => { enqueues++; } } as any);
   const o = upsOrder(); const input: any = { supplierId: 'supplier1', idempotencyKey: 'key1', recipientName: o.recipientName, recipientPhone: o.recipientPhone, recipientCountryCode: '荷兰', recipientCity: o.recipientCity, recipientPostcode: o.recipientPostcode, recipientAddress: 'ABCDEFGHIJKLMNOPQRSTUVW 12', estimatedChargeableKg: '2', boxes: o.boxes.map(({ id, ...box }) => ({ ...box, boxNo: undefined })) };
-  return { svc, db, products, input, wallet, ledgers, resolved, requiredFields, saved: () => saved, counts: () => ({ enqueues, quotes }) };
+  return { svc, db, products, input, wallet, ledgers, resolved, requiredFields, saved: () => saved, savedOrders, counts: () => ({ enqueues, quotes }) };
 }
 
 test('手工建单、Excel 预校验与提交、Open API 都执行当前全局申报必填配置', async () => {
@@ -122,6 +122,58 @@ test('customer Excel import resolves public service code, previews cumulative ba
   assert.equal((await sandbox.svc.importForCustomer('customer1', 'orders.xlsx', [row]))[0].status, 'ERROR');
   assert.equal(sandbox.ledgers.length, 0);
   assert.equal((await h.svc.previewImportForCustomer('customer1', 'other.xlsx', [{ ...row, serviceCode: 'PRIVATE' }]))[0].status, 'ERROR');
+});
+
+test('customer Excel re-import creates new orders only after cancellation and keeps the new attempt idempotent', async () => {
+  const h = orderHarness();
+  const { supplierId: _supplierId, idempotencyKey: _idempotencyKey, ...order } = h.input;
+  const rows = [
+    { rowNo: 2, serviceCode: 'UPS_STANDARD', order: { ...order, clientReference: 'IMPORT-A' } },
+    { rowNo: 10, serviceCode: 'UPS_STANDARD', order: { ...order, clientReference: 'IMPORT-B' } },
+  ];
+  const first = await h.svc.importForCustomer('customer1', 'orders.xlsx', rows);
+  assert.deepEqual(first.map((item) => item.status), ['CREATED', 'CREATED']);
+  assert.deepEqual((await h.svc.previewImportForCustomer('customer1', 'orders.xlsx', rows)).map((item) => item.status), ['ALREADY_CREATED', 'ALREADY_CREATED']);
+
+  h.savedOrders.forEach((item) => { item.shipmentStatus = 'CANCELLED'; });
+  const preview = await h.svc.previewImportForCustomer('customer1', 'orders.xlsx', rows);
+  assert.deepEqual(preview.map((item) => item.status), ['READY', 'READY']);
+  assert.match(preview[0].message ?? '', /此前订单已取消/);
+  const second = await h.svc.importForCustomer('customer1', 'orders.xlsx', rows);
+  assert.deepEqual(second.map((item) => item.status), ['CREATED', 'CREATED']);
+  assert.notEqual(second[0].orderNo, first[0].orderNo);
+  assert.notEqual(second[1].orderNo, first[1].orderNo);
+  assert.equal(h.savedOrders.length, 4);
+  assert.equal(h.ledgers.length, 4);
+  assert.equal(h.wallet.balance.toString(), '60');
+
+  const replay = await h.svc.importForCustomer('customer1', 'orders.xlsx', rows);
+  assert.deepEqual(replay.map((item) => item.orderNo), second.map((item) => item.orderNo));
+  assert.deepEqual((await h.svc.previewImportForCustomer('customer1', 'orders.xlsx', rows)).map((item) => item.status), ['ALREADY_CREATED', 'ALREADY_CREATED']);
+  assert.equal(h.savedOrders.length, 4);
+  assert.equal(h.ledgers.length, 4);
+
+  h.savedOrders[2].shipmentStatus = 'CANCELLED';
+  assert.deepEqual((await h.svc.previewImportForCustomer('customer1', 'orders.xlsx', rows)).map((item) => item.status), ['READY', 'ALREADY_CREATED']);
+  const third = await h.svc.importForCustomer('customer1', 'orders.xlsx', rows);
+  assert.notEqual(third[0].orderNo, second[0].orderNo);
+  assert.equal(third[1].orderNo, second[1].orderNo);
+  assert.equal(h.savedOrders.length, 5);
+  assert.equal(h.ledgers.length, 5);
+});
+
+test('cancelled order displays cancelled dispatch status even when a label was generated earlier', () => {
+  const h = orderHarness();
+  const job = { status: 'COMPLETED', stage: 'READY', reasonCode: 'LABEL_READY', publicMessage: '面单已生成', updatedAt: new Date() };
+  const order: any = { shipmentStatus: 'GENERATED', labels: [{ id: 'label1' }], dispatchJob: job };
+  assert.equal(h.svc.dispatchSummary(order, false).status, 'READY');
+  order.shipmentStatus = 'CANCELLED';
+  for (const admin of [false, true]) {
+    const status = h.svc.dispatchSummary(order, admin);
+    assert.equal(status.status, 'CANCELLED');
+    assert.equal(status.message, '订单已取消');
+    assert.equal(status.reasonCode, 'ORDER_CANCELLED');
+  }
 });
 test('customer Excel DTO rejects customer and supplier overrides while accepting nested order data', async () => {
   const h = orderHarness();

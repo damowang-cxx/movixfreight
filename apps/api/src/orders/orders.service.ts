@@ -125,6 +125,20 @@ export class OrdersService {
   private customerImportKey(customerId: string, sourceFileName: string, row: CustomerImportOrderRow) {
     return `excel-customer-${createHash('sha256').update(JSON.stringify({ customerId, sourceFileName, rowNo: row.rowNo, serviceCode: row.serviceCode, order: row.order })).digest('hex').slice(0, 48)}`;
   }
+  private async customerImportAttempt(customerId: string, sourceFileName: string, row: CustomerImportOrderRow) {
+    const baseKey = this.customerImportKey(customerId, sourceFileName, row);
+    const latest = await this.prisma.order.findFirst({
+      where: { customerId, idempotencyKey: { startsWith: baseKey } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true, idempotencyKey: true, orderNo: true, shipmentStatus: true },
+    });
+    if (!latest) return { idempotencyKey: baseKey, previousCancelled: false, existing: null };
+    if (latest.shipmentStatus !== ShipmentStatus.CANCELLED) return { idempotencyKey: latest.idempotencyKey, previousCancelled: false, existing: latest };
+    // A cancelled import is a completed attempt. Derive the next key from that
+    // order so concurrent re-uploads still converge on one new order/debit.
+    const suffix = createHash('sha256').update(latest.id).digest('hex').slice(0, 16);
+    return { idempotencyKey: `${baseKey}-r${suffix}`, previousCancelled: true, existing: null };
+  }
   async previewImportForCustomer(customerId: string, sourceFileName: string, rows: CustomerImportOrderRow[]) {
     const customer = await this.prisma.customer.findUnique({ where: { id: customerId }, include: { wallets: true } });
     if (!customer) throw new NotFoundException('客户不存在');
@@ -133,10 +147,9 @@ export class OrdersService {
     const results = [];
     for (const row of rows) {
       try {
-        const previous = await this.prisma.order.findUnique({ where: { idempotencyKey: this.customerImportKey(customerId, sourceFileName, row) } });
-        if (previous) {
-          if (previous.customerId !== customerId) throw new ConflictException('导入幂等键已被其他客户使用');
-          results.push({ rowNo: row.rowNo, status: 'ALREADY_CREATED' as const, orderNo: previous.orderNo, message: '该行此前已创建，不会再次扣费。' });
+        const attempt = await this.customerImportAttempt(customerId, sourceFileName, row);
+        if (attempt.existing) {
+          results.push({ rowNo: row.rowNo, status: 'ALREADY_CREATED' as const, orderNo: attempt.existing.orderNo, message: '该行此前已创建且未取消，不会再次扣费。' });
           continue;
         }
         const resolved = await this.customerImportService(row.serviceCode, row.order.recipientCountryCode);
@@ -145,7 +158,7 @@ export class OrdersService {
         const nextTotal = (totals.get(quote.currency) ?? new Prisma.Decimal(0)).add(quote.total);
         if (!wallet || wallet.balance.lessThan(0) || wallet.balance.lessThan(nextTotal)) throw new ForbiddenException(`${quote.currency} 余额不足，无法覆盖本次导入的累计预扣`);
         totals.set(quote.currency, nextTotal);
-        results.push({ rowNo: row.rowNo, status: 'READY' as const, currency: quote.currency, estimatedReceivable: quote.total });
+        results.push({ rowNo: row.rowNo, status: 'READY' as const, currency: quote.currency, estimatedReceivable: quote.total, ...(attempt.previousCancelled ? { message: '此前订单已取消；确认后将生成新订单并重新预扣。' } : {}) });
       } catch (error) { results.push({ rowNo: row.rowNo, status: 'ERROR' as const, error: error instanceof Error ? error.message : '预校验失败' }); }
     }
     return results;
@@ -154,15 +167,13 @@ export class OrdersService {
     const results = [];
     for (const row of rows) {
       try {
-        const idempotencyKey = this.customerImportKey(customerId, sourceFileName, row);
-        const existing = await this.prisma.order.findUnique({ where: { idempotencyKey } });
-        if (existing) {
-          if (existing.customerId !== customerId) throw new ConflictException('导入幂等键已被其他客户使用');
-          results.push({ rowNo: row.rowNo, status: 'CREATED' as const, orderId: existing.id, orderNo: existing.orderNo, labelStatus: 'PENDING' as const, message: '该行此前已创建，未再次预扣或生成面单。' });
+        const attempt = await this.customerImportAttempt(customerId, sourceFileName, row);
+        if (attempt.existing) {
+          results.push({ rowNo: row.rowNo, status: 'CREATED' as const, orderId: attempt.existing.id, orderNo: attempt.existing.orderNo, labelStatus: 'PENDING' as const, message: '该行此前已创建且未取消，未再次预扣或生成面单。' });
           continue;
         }
         const resolved = await this.customerImportService(row.serviceCode, row.order.recipientCountryCode);
-        const order = await this.createForCustomer(customerId, { ...row.order, supplierId: resolved.supplier.id, idempotencyKey }, { requestedServiceId: resolved.service.id });
+        const order = await this.createForCustomer(customerId, { ...row.order, supplierId: resolved.supplier.id, idempotencyKey: attempt.idempotencyKey }, { requestedServiceId: resolved.service.id });
         results.push({ rowNo: row.rowNo, status: 'CREATED' as const, orderId: order.id, orderNo: order.orderNo, labelStatus: 'PENDING' as const, message: '下单成功，已完成预扣，正在自动校验并生成面单。' });
       } catch (error) { results.push({ rowNo: row.rowNo, status: 'ERROR' as const, error: error instanceof Error ? error.message : '导入失败' }); }
     }
@@ -263,9 +274,9 @@ export class OrdersService {
     const now = Date.now();
     const base = { retryAllowed: false };
     if (terminalOrderStatus === ShipmentStatus.UNKNOWN) return { ...base, status: 'UNKNOWN', stage: 'UNKNOWN', reasonCode: 'SUPPLIER_RESULT_UNKNOWN', message: job?.status === ShipmentDispatchJobStatus.UNKNOWN && job.publicMessage ? job.publicMessage : '供应商创建或取消结果未知，请人工核查，不要重复打单或自动重试', lastActivityAt: job?.updatedAt ?? null };
+    if (terminalOrderStatus === ShipmentStatus.CANCELLED) return { ...base, status: 'CANCELLED', stage: 'CANCELLED', message: '订单已取消', reasonCode: 'ORDER_CANCELLED', lastActivityAt: job?.updatedAt ?? null };
     if (terminalOrderStatus === ShipmentStatus.GENERATED && job?.reasonCode === 'LABEL_PROCESSING_FAILED') return { ...base, status: 'FAILED', stage: 'PDF_PROCESSING', reasonCode: 'LABEL_PROCESSING_FAILED', message: '运单已生成，PDF 处理失败；再次预览/下载仅重做本地转换，不会重复打单', lastActivityAt: job.updatedAt };
     if (terminalOrderStatus === ShipmentStatus.GENERATED || (job?.status === ShipmentDispatchJobStatus.COMPLETED && order.labels.length > 0)) return { ...base, status: 'READY', stage: 'READY', message: '面单已生成，可预览或下载 PDF', reasonCode: 'LABEL_READY', lastActivityAt: job?.updatedAt ?? null };
-    if (terminalOrderStatus === ShipmentStatus.CANCELLED) return { ...base, status: 'CANCELLED', stage: 'CANCELLED', message: '订单已取消', reasonCode: 'ORDER_CANCELLED', lastActivityAt: job?.updatedAt ?? null };
     if (!job) return { ...base, status: 'BLOCKED', stage: 'UNSUPPORTED', message: '该历史订单未纳入自动面单任务，请联系管理员核查', reasonCode: 'DISPATCH_JOB_MISSING', lastActivityAt: null };
     const referenceAt = job.status === ShipmentDispatchJobStatus.PROCESSING ? job.startedAt ?? job.claimedAt ?? job.updatedAt : job.queuedAt ?? job.updatedAt;
     if ([ShipmentDispatchJobStatus.PENDING, ShipmentDispatchJobStatus.PROCESSING].includes(job.status) && referenceAt && now - new Date(referenceAt).getTime() >= 10 * 60_000) {
