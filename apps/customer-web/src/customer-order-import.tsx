@@ -5,13 +5,14 @@ import { errorText } from './error-dialog';
 
 type ImportResult = { rowNo: number; status: 'READY' | 'ALREADY_CREATED' | 'CREATED' | 'ERROR'; currency?: string; estimatedReceivable?: string; orderNo?: string; labelStatus?: string; message?: string; error?: string };
 type ImportRow = { rowNo: number; serviceCode: string; order: Record<string, any> };
-type Props = { services: { code: string; name: string }[]; declarationFields: { fields?: Array<{ code: string; required: boolean }> } | null; request: (path: string, options?: RequestInit) => Promise<Response>; onDone: () => Promise<void> };
+type DeclarationFields = { fields?: Array<{ code: string; required: boolean }> } | null;
+type Props = { services: { code: string; name: string }[]; request: (path: string, options?: RequestInit) => Promise<Response>; onDone: () => Promise<void> };
 
 const headers = ['导入订单号', '服务代码', '收件人', '收件公司', '收件电话', '国家', '邮编', '城市', '省/州', '地址', '是否住宅地址', '预估收费重(kg)', '箱号', '长(cm)', '宽(cm)', '高(cm)', '中文品名', '英文品名', '材质', '商品净重(kg)', '原产国', 'HS编码', '数量', '单件申报货值', '申报币种'];
 const declarationHeaders: Record<string, string> = { weightKg: '预估收费重(kg)', lengthCm: '长(cm)', widthCm: '宽(cm)', heightCm: '高(cm)', chineseName: '中文品名', englishName: '英文品名', material: '材质', originCountryCode: '原产国', harmonizedCode: 'HS编码', quantity: '数量', unitDeclaredValue: '单件申报货值', declaredValueCurrency: '申报币种' };
 const baseRequiredHeaders = new Set(['导入订单号', '服务代码', '收件人', '国家', '邮编', '城市', '地址', '预估收费重(kg)', '长(cm)', '宽(cm)', '高(cm)']);
 const value = (record: Record<string, unknown>, key: string) => String(record[key] ?? '').trim();
-export function importTemplateHeaders(declarationFields: Props['declarationFields']) {
+export function importTemplateHeaders(declarationFields: DeclarationFields) {
   const required = new Set([...baseRequiredHeaders, ...(declarationFields?.fields ?? []).filter((field) => field.required).map((field) => declarationHeaders[field.code]).filter((header): header is string => Boolean(header))]);
   return headers.map((header) => required.has(header) ? `${header}*` : header);
 }
@@ -25,7 +26,7 @@ export function normalizeImportHeaders(record: Record<string, unknown>) {
   return normalized;
 }
 
-async function downloadTemplate(services: Props['services'], declarationFields: Props['declarationFields']) {
+async function downloadTemplate(services: Props['services'], declarationFields: DeclarationFields) {
   const XLSX = await import('xlsx');
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.aoa_to_sheet([importTemplateHeaders(declarationFields)]);
@@ -36,9 +37,9 @@ async function downloadTemplate(services: Props['services'], declarationFields: 
     ['服务代码', '仅填写下方客户可用服务代码；供应商连接编号不用填写。'],
     ['国家', '填写已启用国家表中的中文名或 ISO 两位代码。'],
     ['预估收费重(kg)', '按箱填写；不同箱号可不同。同一箱号有多行货品时须一致。系统按每箱数值计价，并汇总为整票预估收费重。填写大于 0 的数字，最多保留 3 位小数。'],
-    ['表头星号', '星号提示当前系统设置中的必填字段；上传时带星号或不带星号的表头均可识别，字段值仍按当前配置和线路规则校验。箱号可留空并由系统生成。'],
+    ['表头星号', '星号提示通用必填和当前系统设置中的必填字段；上传时带星号或不带星号的表头均可识别。承运商线路仍可额外要求未标星的字段。商品净重可留空；填写后会校验并传给承运商。箱号可留空并由系统生成。'],
     ['下单重量', 'Excel 只填写每箱预估收费重；建单时系统以此作为承运商所需的申报重量。最终收费重在后续对账时确定；实际重量的自动回传取决于承运商接口。'],
-    ['泛欧线路', '商品净重、英文品名、原产国、HS 编码、数量、单件货值和申报币种必填。'],
+    ['泛欧线路', '英文品名、HS 编码、数量、单件货值和申报币种必填；商品净重可留空，原产国按系统申报设置校验。'],
     ['可用服务代码', '服务名称'],
     ...services.map((service) => [service.code, service.name]),
   ]);
@@ -113,7 +114,7 @@ function previewErrorText(error: unknown, rows: ImportRow[]) {
     `Excel 第 ${rows[Number(index)]?.rowNo ?? Number(index) + 2} 行：预估收费重(kg)必须为大于 0 的数字，最多保留 3 位小数`);
 }
 
-export function CustomerOrderImport({ services, declarationFields, request, onDone }: Props) {
+export function CustomerOrderImport({ services, request, onDone }: Props) {
   const [rows, setRows] = useState<ImportRow[]>([]);
   const [results, setResults] = useState<ImportResult[]>([]);
   const [sourceFileName, setSourceFileName] = useState('');
@@ -156,6 +157,12 @@ export function CustomerOrderImport({ services, declarationFields, request, onDo
     } catch (error) { showImportError(previewErrorText(error, parsedRows)); } finally { setBusy(false); }
   };
   const ready = rows.length > 0 && validated && !committed;
+  const downloadCurrentTemplate = async () => {
+    try {
+      const latest = await (await request('/customer/v1/declaration-fields')).json() as DeclarationFields;
+      await downloadTemplate(services, latest);
+    } catch (error) { showImportError(errorText(error)); }
+  };
   const commit = () => Modal.confirm({
     title: '确认批量创建订单',
     content: `将创建 ${rows.length} 票订单，逐票预扣对应币种余额并自动进入面单生成队列。余额或线路若在预览后变化，部分订单可能失败。`,
@@ -174,11 +181,11 @@ export function CustomerOrderImport({ services, declarationFields, request, onDo
     },
   });
   return <div className="customer-import">
-    <Alert showIcon type="info" message="先解析预览，确认后才扣费" description="模板中每行是一条货品明细；相同导入订单号合并为一票。只有全部预校验通过才能提交。重复提交同一文件内容不会重复扣费。" />
+    <Alert showIcon type="info" message="先解析预览，确认后才扣费" description="模板中每行是一条货品明细；相同导入订单号合并为一票。星号反映通用和系统设置的必填项；所选线路还可能要求额外字段；商品净重可留空。只有全部预校验通过才能提交。" />
     {importError && <Alert showIcon type="error" message="Excel 预校验或导入未完成" description={<span style={{ whiteSpace: 'pre-wrap' }}>{importError}</span>} style={{ marginTop: 12 }} />}
     <Modal title="Excel 预校验或导入未完成" open={errorDialogOpen} zIndex={1100} okText="我知道了" onOk={() => setErrorDialogOpen(false)} onCancel={() => setErrorDialogOpen(false)} cancelButtonProps={{ style: { display: 'none' } }}><Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{importError}</Typography.Text></Modal>
     <div className="customer-import__actions">
-      <Space wrap><Button icon={<DownloadOutlined />} onClick={() => { void downloadTemplate(services, declarationFields).catch((error) => showImportError(errorText(error))); }}>下载 Excel 模板</Button><Upload accept=".xlsx,.xls" maxCount={1} showUploadList={false} beforeUpload={(file) => { void parseFile(file); return false; }}><Button type="primary" icon={<UploadOutlined />} loading={busy}>选择并预校验</Button></Upload><Button disabled={!ready || busy} onClick={commit}>{results.some((item) => item.status === 'CREATED') ? '重试未成功订单' : `确认创建 ${rows.length || ''} 票订单`}</Button></Space>
+      <Space wrap><Button icon={<DownloadOutlined />} onClick={() => { void downloadCurrentTemplate(); }}>下载 Excel 模板</Button><Upload accept=".xlsx,.xls" maxCount={1} showUploadList={false} beforeUpload={(file) => { void parseFile(file); return false; }}><Button type="primary" icon={<UploadOutlined />} loading={busy}>选择并预校验</Button></Upload><Button disabled={!ready || busy} onClick={commit}>{results.some((item) => item.status === 'CREATED') ? '重试未成功订单' : `确认创建 ${rows.length || ''} 票订单`}</Button></Space>
       {sourceFileName && <Typography.Text type="secondary">当前文件：{sourceFileName}</Typography.Text>}
     </div>
     <Card size="small" className="customer-import__services" title="可用服务代码"><Space wrap>{services.length ? services.map((service) => <Tag key={service.code}>{service.name} · {service.code}</Tag>) : <Typography.Text type="secondary">暂无可下单服务</Typography.Text>}</Space></Card>

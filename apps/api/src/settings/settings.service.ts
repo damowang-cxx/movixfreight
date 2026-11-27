@@ -20,7 +20,7 @@ export const DECLARATION_FIELDS = [
 ] as const;
 
 export type DeclarationFieldCode = typeof DECLARATION_FIELDS[number]['code'];
-const fedexRequired: DeclarationFieldCode[] = ['englishName', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'];
+const fedexRequired: DeclarationFieldCode[] = ['englishName', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'];
 
 export type LabelTemplateElement = { id: string; type: 'TEXT' | 'FIELD' | 'BARCODE' | 'LOGO'; value: string; xMm: number; yMm: number; widthMm?: number; heightMm?: number; fontSize?: number };
 export type LabelTemplateInput = { supplierId: string; name: string; outputFormat: string; labelStockType: string; thermalDpi?: number | null; customElements?: LabelTemplateElement[]; enabled?: boolean; applyToCarrier?: boolean };

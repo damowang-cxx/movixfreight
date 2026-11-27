@@ -172,10 +172,10 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
             <tr><td>client_length / client_width / client_height</td><td>number / 必填</td><td>该箱长、宽、高，cm，均须大于 0；同时受所选线路尺寸限制。</td></tr>
             <tr><td>declarations</td><td>Declaration[] / 必填</td><td>每箱至少一条；下列字段逐项填写。</td></tr>
             <tr><td>name_cn / name_en</td><td>string / 按规则</td><td>中、英文品名；UPS 必须有可打印英文描述，FedEx 泛欧必须有英文品名，其他按管理员全局申报规则。</td></tr>
-            <tr><td>weight</td><td>number / 按规则</td><td>单条商品净重，kg；FedEx 泛欧必须大于 0，且每箱商品净重合计不得超过箱重。</td></tr>
+            <tr><td>weight</td><td>number / 按规则</td><td>单条商品净重，kg；FedEx 泛欧可省略，填写时必须大于 0，且每箱商品净重合计不得超过箱重。</td></tr>
             <tr><td>length / width / height</td><td>number / 可选</td><td>单条商品尺寸，cm；与箱体尺寸字段不同。</td></tr>
             <tr><td>sku / material</td><td>string / 按规则</td><td>商品 SKU 与材质；材质是否必填由全局申报规则决定。</td></tr>
-            <tr><td>origin_country / hs_code</td><td>string / 按规则</td><td>原产国与 HS 编码；FedEx 泛欧必填。原产国可用中文国名、英文国名或两字代码。</td></tr>
+            <tr><td>origin_country / hs_code</td><td>string / 按规则</td><td>FedEx 泛欧的 HS 编码必填；原产国按系统申报设置校验，填写时可用中文国名、英文国名或两字代码。</td></tr>
             <tr><td>quantity</td><td>integer / 按规则</td><td>申报数量，填写时必须为不小于 1 的整数；FedEx 泛欧必填。</td></tr>
             <tr><td>unit_price</td><td>number / 按规则</td><td>单件申报货值；填写时须大于 0，FedEx 泛欧必填。币种使用 shipment.declaration_currency。</td></tr>
           </tbody></table>
@@ -252,7 +252,7 @@ Idempotency-Key: erp-order-20260824-0001</pre></div>
             <tr><td>state / state_code</td><td>同时提供时优先使用 <code>state_code</code>。UPS 爱尔兰线路必填省/州代码（最多 5 字符），其他当前线路可选。</td></tr>
             <tr><td>parcels</td><td><code>parcel_count</code> 必须等于数组长度；<code>number</code> 可留空，系统会生成订单号前缀箱号；已填写的箱号不可重复；重量、长、宽、高均大于 0。</td></tr>
             <tr><td>FedEx 荷兰本土</td><td>目的国 <code>NL</code> 自动进入本土线路，不下发跨境清关货品；调用方仍只提交客户可见服务代码。</td></tr>
-            <tr><td>FedEx 泛欧经济型</td><td>管理员已配置的非 NL 欧洲目的国自动进入泛欧线路。每条申报明细必须有 <code>name_en</code>、<code>weight</code>（商品净重 kg）、<code>origin_country</code>、<code>hs_code</code>、<code>quantity</code>、<code>unit_price</code> 与申报币种；商品净重合计不得超过箱重，单箱最多 68 kg。税费固定由发件人支付。</td></tr>
+            <tr><td>FedEx 泛欧经济型</td><td>管理员已配置的非 NL 欧洲目的国自动进入泛欧线路。每条申报明细必须有 <code>name_en</code>、<code>hs_code</code>、<code>quantity</code>、<code>unit_price</code> 与申报币种；<code>weight</code>（商品净重 kg）可省略，<code>origin_country</code> 按系统设置校验；填写商品净重时合计不得超过箱重，单箱最多 68 kg。税费固定由发件人支付。</td></tr>
             <tr><td>declarations</td><td>必填项由全局申报规则及所选供应商路由共同确定。UPS 必须填写可打印英文 <code>name_en</code>；FedEx 泛欧经济型还要求上述清关字段。路由要求时系统会明确拒绝缺失或无效字段。</td></tr>
             <tr><td>税务/贸易字段</td><td>当前 FedEx 和 UPS 线路仅接受默认值；<code>taxwith</code>、<code>deliverywith</code>、<code>exportwith</code>、<code>importwith</code> 与 <code>attrs</code> 的非默认值会被拒绝，避免静默丢失。</td></tr>
             <tr><td>declaration_currency</td><td>仅支持 <code>EUR</code>、<code>GBP</code>。</td></tr>

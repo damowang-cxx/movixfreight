@@ -38,14 +38,14 @@ export class FedexRelayMapper {
   private customs(order: FedexOrder) {
     const entries = order.boxes.flatMap((box) => box.items.map((item) => ({ box, item })));
     const items = entries.map((entry) => entry.item);
-    if (!items.length || items.some((item) => !item.englishName || !item.itemWeightKg || !item.originCountryCode || !item.harmonizedCode || !item.quantity || !item.unitDeclaredValue || !item.declaredValueCurrency)) {
-      throw new BadRequestException('泛欧 FedEx 打单要求每条申报货品填写英文品名、净重、原产国、HS 编码、数量、单件申报货值和申报币种');
+    if (!items.length || items.some((item) => !item.englishName || !item.harmonizedCode || !item.quantity || !item.unitDeclaredValue || !item.declaredValueCurrency)) {
+      throw new BadRequestException('泛欧 FedEx 打单要求每条申报货品填写英文品名、HS 编码、数量、单件申报货值和申报币种');
     }
-    for (const { box, item } of entries) if (Number(item.itemWeightKg) <= 0 || Number(item.itemWeightKg) > Number(box.weightKg)) throw new BadRequestException(`箱号 ${box.boxNo} 的申报货品净重无效`);
+    for (const { box, item } of entries) if (item.itemWeightKg != null && (Number(item.itemWeightKg) <= 0 || Number(item.itemWeightKg) > Number(box.weightKg))) throw new BadRequestException(`箱号 ${box.boxNo} 的申报货品净重无效`);
     const currencies = [...new Set(items.map((item) => item.declaredValueCurrency!))];
     if (currencies.length !== 1) throw new BadRequestException('跨境 FedEx 首期不支持同票多种申报币种');
     const currency = currencies[0]!;
     const total = items.reduce((sum, item) => sum + Number(item.unitDeclaredValue!) * item.quantity!, 0);
-    return { dutiesPayment: { paymentType: 'SENDER' }, documentContent: 'NON_DOCUMENTS', customsValue: { amount: total, currency }, commodities: items.map((item) => ({ description: item.englishName!, countryOfManufacture: item.originCountryCode!, harmonizedCode: item.harmonizedCode!, quantity: item.quantity!, quantityUnits: 'PCS', unitPrice: { amount: Number(item.unitDeclaredValue!), currency }, customsValue: { amount: Number(item.unitDeclaredValue!) * item.quantity!, currency }, weight: { units: 'KG', value: Number(item.itemWeightKg) } })), commercialInvoice: { shipmentPurpose: 'SOLD' } };
+    return { dutiesPayment: { paymentType: 'SENDER' }, documentContent: 'NON_DOCUMENTS', customsValue: { amount: total, currency }, commodities: items.map((item) => ({ description: item.englishName!, ...(item.originCountryCode ? { countryOfManufacture: item.originCountryCode } : {}), harmonizedCode: item.harmonizedCode!, quantity: item.quantity!, quantityUnits: 'PCS', unitPrice: { amount: Number(item.unitDeclaredValue!), currency }, customsValue: { amount: Number(item.unitDeclaredValue!) * item.quantity!, currency }, ...(item.itemWeightKg != null ? { weight: { units: 'KG', value: Number(item.itemWeightKg) } } : {}) })), commercialInvoice: { shipmentPurpose: 'SOLD' } };
   }
 }

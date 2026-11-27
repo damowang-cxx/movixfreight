@@ -23,7 +23,7 @@ py -3 infra/scripts/test_open_api.py --init
 notepad tmp/open-api-test/request.json
 ```
 
-编辑模板：`service` 填客户可见的线上服务代码，填真实收件人、电话、国家、地址、箱重尺寸与申报数据；替换全部 `__REPLACE_...__` 占位符和 null 数值。不使用的可选字段可删除。请勿向客户提供后台供应商连接编号。FedEx 泛欧净重、原产国、HS 编码等要求仍由线上规则强制校验，UPS 英文描述等限制见下文。
+编辑模板：`service` 填客户可见的线上服务代码，填真实收件人、电话、国家、地址、箱重尺寸与申报数据；替换全部 `__REPLACE_...__` 占位符和 null 数值。不使用的可选字段可删除。请勿向客户提供后台供应商连接编号。FedEx 泛欧的 HS 编码等要求仍由线上规则强制校验，商品净重可省略，原产国按系统申报设置决定；UPS 英文描述等限制见下文。
 
 提交一票真实订单并等待逐箱 PDF：
 
@@ -113,7 +113,7 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。应
 | `from_address` | Address 对象 | 可选，仅作为订单资料保存；不能覆盖供应商预设的发件人。 |
 | `parcels[]` | `client_weight`, `client_length`, `client_width`, `client_height`, `declarations` | 必填；重量 kg、尺寸 cm，数值均大于 0；每箱至少一条申报明细。 |
 | `parcels[]` | `number`, `reference` | 可选；空箱号由系统生成，非空箱号不可重复；`reference` 是箱子参考号。 |
-| `declarations[]` | `name_cn`, `name_en`, `weight`, `length`, `width`, `height`, `sku`, `material`, `origin_country`, `hs_code`, `quantity`, `unit_price` | 字段可省略性受全局申报设置与线路要求共同决定；FedEx 泛欧强制英文名、商品净重、原产国、HS、数量和单价；UPS 强制可打印英文描述。`quantity` 为正整数，填写的净重和单价须大于 0。 |
+| `declarations[]` | `name_cn`, `name_en`, `weight`, `length`, `width`, `height`, `sku`, `material`, `origin_country`, `hs_code`, `quantity`, `unit_price` | 字段可省略性受全局申报设置与线路要求共同决定；FedEx 泛欧强制英文名、HS、数量和单价，商品净重可省略，原产国按系统申报设置决定；UPS 强制可打印英文描述。`quantity` 为正整数，填写的净重和单价须大于 0。 |
 
 完整 JSON 示例及线路字段差异请以在线页面的“创建运单”“完整字段表”“线路规则”章节为准。未知 JSON 字段会被拒绝。
 
@@ -122,7 +122,7 @@ API Key 由管理员在客户详情创建或轮换；明文只显示一次。应
 | 命中线路 | 目的国 | 实际 FedEx 服务 | 额外申报规则 |
 | --- | --- | --- | --- |
 | 荷兰本土 | `NL` | `FEDEX_PRIORITY` | 不建立跨境 `customsClearanceDetail`；申报字段仅受系统全局必填设置约束。 |
-| 泛欧经济型 | 管理员为供应商配置的欧洲国家（不含 `NL`） | `FEDEX_REGIONAL_ECONOMY` | 每条申报明细必须有 `name_en`、`weight`（商品净重 kg）、`origin_country`、`hs_code`、`quantity`、`unit_price`、`declaration_currency`。商品净重合计不得超过箱子实重，单箱最多 68 kg。 |
+| 泛欧经济型 | 管理员为供应商配置的欧洲国家（不含 `NL`） | `FEDEX_REGIONAL_ECONOMY` | 每条申报明细必须有 `name_en`、`hs_code`、`quantity`、`unit_price`、`declaration_currency`。`weight`（商品净重 kg）可省略，`origin_country` 按系统设置校验；填写商品净重时合计不得超过箱子实重，单箱最多 68 kg。 |
 
 泛欧经济型请求固定按非文件商业货物发送，税费付款方固定为发件人（`SENDER`）。`taxwith`、`deliverywith`、`exportwith`、`importwith` 和 `attrs` 当前没有确认的 FedEx Relay 映射，不能在 FedEx 国家路由中使用；传入非默认值会被明确拒绝。
 

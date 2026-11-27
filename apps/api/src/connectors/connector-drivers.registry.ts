@@ -40,7 +40,7 @@ export const fedexRoutePresets = {
     carrierServiceType: 'FEDEX_REGIONAL_ECONOMY',
     customsMode: 'COMMODITIES',
     label: '泛欧 FedEx Regional Economy',
-    description: '欧洲跨境经济型线路。每箱最多 68 kg；必须申报货品净重、原产国、HS 编码、数量、单价和币种；税费由发件人支付。',
+    description: '欧洲跨境经济型线路。每箱最多 68 kg；商品净重可留空，原产国按系统申报设置校验；英文品名、HS 编码、数量、单价和币种按线路要求校验；税费由发件人支付。',
     packageMaxWeightKg: 68,
   },
 } as const;
@@ -75,7 +75,7 @@ export function routeFieldSchema(driverCode: string, customsMode: string, fieldC
     addressLineLimit: driverCode === 'UPS_OFFICIAL' ? 35 : driverCode === 'DPD_RELAY_UK' ? 30 : 20,
     shipmentOptions: options,
     customsMode,
-    declarationRequired: commodityRequired ? ['englishName', 'itemWeightKg', 'originCountryCode', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : driverCode === 'DPD_RELAY_UK' ? ['englishName', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : driverCode === 'UPS_OFFICIAL' ? ['englishName'] : [],
+    declarationRequired: commodityRequired ? ['englishName', 'harmonizedCode', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : driverCode === 'DPD_RELAY_UK' ? ['englishName', 'quantity', 'unitDeclaredValue', 'declaredValueCurrency'] : driverCode === 'UPS_OFFICIAL' ? ['englishName'] : [],
     carrierRules: preset ? {
       serviceTypeLocked: preset.carrierServiceType,
       packageMaxWeightKg: preset.packageMaxWeightKg ?? null,

@@ -304,7 +304,11 @@ export class OrdersService {
       if (!box.items.length) throw new BadRequestException(`箱号 ${boxNo} 至少需要一条申报明细`);
       let declaredNetWeight = 0;
       for (const item of box.items) {
-        const missing = (field: string, label: string, value: unknown) => { if (needs(field) && (value === undefined || value === null || String(value).trim() === '')) throw new BadRequestException(`箱号 ${boxNo} 的申报明细缺少${label}`); };
+        const missing = (field: string, label: string, value: unknown) => {
+          if (!needs(field) || (value !== undefined && value !== null && String(value).trim() !== '')) return;
+          const routeReason = routeSchema.declarationRequired?.includes(field) ? '（所选线路强制要求，系统设置为非必填也不能省略）' : '';
+          throw new BadRequestException(`箱号 ${boxNo} 的申报明细缺少${label}${routeReason}`);
+        };
         missing('chineseName', '中文品名', item.chineseName); missing('englishName', '英文品名', item.englishName); missing('material', '材质', item.material); missing('originCountryCode', '原产国', item.originCountryCode); missing('harmonizedCode', 'HS 编码', item.harmonizedCode); missing('declaredValueCurrency', '申报币种', item.declaredValueCurrency);
         if (needs('quantity') && (!Number.isInteger(item.quantity) || item.quantity! < 1)) throw new BadRequestException(`箱号 ${boxNo} 的申报数量必须为正整数`);
         if (item.quantity !== undefined && (!Number.isInteger(item.quantity) || item.quantity < 1)) throw new BadRequestException(`箱号 ${boxNo} 的申报数量必须为正整数`);
@@ -315,7 +319,7 @@ export class OrdersService {
         if (item.unitDeclaredValue !== undefined && item.unitDeclaredValue !== '' && (!Number.isFinite(Number(item.unitDeclaredValue)) || Number(item.unitDeclaredValue) <= 0)) throw new BadRequestException(`箱号 ${boxNo} 的申报单价必须大于 0`);
         if (item.declaredValueCurrency) declarationCurrencies.add(item.declaredValueCurrency);
       }
-      if (needs('itemWeightKg') && declaredNetWeight > Number(box.weightKg) + 0.000001) throw new BadRequestException(`箱号 ${boxNo} 的申报货品净重合计不得超过箱子实重`);
+      if (declaredNetWeight > Number(box.weightKg) + 0.000001) throw new BadRequestException(`箱号 ${boxNo} 的申报货品净重合计不得超过箱子实重`);
     }
     if (declarationCurrencies.size > 1) throw new BadRequestException('同一票订单的申报明细必须使用同一币种');
   }

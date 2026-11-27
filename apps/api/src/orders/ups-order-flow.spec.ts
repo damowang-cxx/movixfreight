@@ -61,6 +61,15 @@ test('Open API 申报币种可随系统配置关闭，线路仍可单独要求',
   await assert.rejects(routeRequired.svc.createForCustomer('customer1', routeRequired.input), /缺少申报币种/);
 });
 
+test('全局非必填字段被线路要求时，预校验说明要求来源', async () => {
+  const h = orderHarness();
+  h.resolved.route.fieldSchema.declarationRequired.push('originCountryCode');
+  const { supplierId: _supplierId, idempotencyKey: _idempotencyKey, ...order } = h.input;
+  const result = await h.svc.previewImportForCustomer('customer1', 'orders.xlsx', [{ rowNo: 2, serviceCode: 'UPS_STANDARD', order }]);
+  assert.match(result[0].error ?? '', /缺少原产国.*所选线路强制要求/);
+  assert.equal(h.counts().quotes, 0);
+});
+
 test('系统设置中的每个可配置申报字段都在建单前校验', async () => {
   const fields: Array<[string, string]> = [['chineseName', '中文品名'], ['englishName', '英文品名'], ['material', '材质'], ['originCountryCode', '原产国'], ['harmonizedCode', 'HS 编码'], ['quantity', '申报数量'], ['unitDeclaredValue', '申报单价'], ['declaredValueCurrency', '申报币种']];
   for (const [field, label] of fields) {
