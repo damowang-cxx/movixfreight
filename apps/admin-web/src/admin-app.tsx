@@ -802,7 +802,15 @@ function OrderFeeDetails({ order }: { order: any }) {
     return (first < 0 ? feeLineOrder.length : first) - (second < 0 ? feeLineOrder.length : second);
   });
   const finalReceivable = order.feeLines?.find((line: any) => line.feeType === 'FINAL_RECEIVABLE')?.amount ?? order.prechargedAmount;
-  return <Card size="small" title="应收费用"><Table size="small" rowKey="id" pagination={false} dataSource={feeLines} columns={[
+  const weightSnapshot = feeLines.find((line: any) => line.feeType === 'SUPPLIER_WEIGHT_FREIGHT')?.snapshot;
+  const quotedWeights = Array.isArray(weightSnapshot?.calculatedChargeableWeightsKg) ? weightSnapshot.calculatedChargeableWeightsKg : null;
+  return <Card size="small" title="应收费用">
+    <Descriptions size="small" column={2} style={{ marginBottom: 12 }} items={[
+      { key: 'estimatedWeight', label: '下单预估收费重', children: `${order.estimatedChargeableKg ?? '—'} kg` },
+      { key: 'quotedWeight', label: '成本表查档重量', children: quotedWeights ? `${quotedWeights.join(' + ')} kg` : '旧订单未记录' },
+      { key: 'costVersion', label: '成本表版本', children: weightSnapshot?.costVersion ?? '—' },
+    ]} />
+    <Table size="small" rowKey="id" pagination={false} dataSource={feeLines} columns={[
     { title: '费用项', dataIndex: 'feeType', render: (value: string) => feeLineLabels[value] ?? value ?? '—' },
     { title: '金额', dataIndex: 'amount' },
     { title: '币种', dataIndex: 'currency' },
